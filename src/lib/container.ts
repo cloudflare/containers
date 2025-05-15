@@ -1,43 +1,6 @@
-import { Server, type Connection } from "partyserver";
-import { AsyncLocalStorage } from "node:async_hooks";
-import { nanoid } from "nanoid";
-import type {
-  ContainerOptions,
-  Schedule
-} from "../types";
-
-// Context for storing container and connection information
-const containerContext = new AsyncLocalStorage<{
-  container: Container;
-  connection: Connection | undefined;
-  request: Request | undefined;
-}>();
-
-/**
- * Helper function to get the current container context
- */
-export function getCurrentContainer<T extends Container = Container>(): {
-  container: T | undefined;
-  connection: Connection | undefined;
-  request: Request | undefined;
-} {
-  const store = containerContext.getStore() as
-    | {
-        container: T;
-        connection: Connection | undefined;
-        request: Request | undefined;
-      }
-    | undefined;
-
-  if (!store) {
-    return {
-      container: undefined,
-      connection: undefined,
-      request: undefined,
-    };
-  }
-  return store;
-}
+import { Server } from 'partyserver';
+import { nanoid } from 'nanoid';
+import type { ContainerOptions, ContainerStartOptions, Schedule } from '../types';
 
 /**
  * Main Container class that wraps PartyKit's Server with container functionality
@@ -47,7 +10,7 @@ export class Container<Env = unknown> extends (Server as any) {
   defaultPort?: number;
 
   // Timeout after which the container will sleep if no activity
-  sleepAfter: string | number = "5m";
+  sleepAfter: string | number = '5m';
 
   // Internal tracking for sleep timeout task
   #sleepTimeoutTaskId: string | null = null;
@@ -59,9 +22,7 @@ export class Container<Env = unknown> extends (Server as any) {
    * Container configuration properties
    * Set these properties directly in your container instance
    */
-  env: Record<string, string> = {};
-  entrypoint?: string[];
-  enableInternet: boolean = true;
+  startOptions?: ContainerStartOptions;
 
   /**
    * Execute SQL queries against the Container's database
@@ -70,13 +31,10 @@ export class Container<Env = unknown> extends (Server as any) {
     strings: TemplateStringsArray,
     ...values: (string | number | boolean | null)[]
   ) {
-    let query = "";
+    let query = '';
     try {
       // Construct the SQL query with placeholders
-      query = strings.reduce(
-        (acc, str, i) => acc + str + (i < values.length ? "?" : ""),
-        ""
-      );
+      query = strings.reduce((acc, str, i) => acc + str + (i < values.length ? '?' : ''), '');
 
       // Execute the SQL query with the provided values
       return [...this.ctx.storage.sql.exec(query, ...values)] as T[];
@@ -93,7 +51,11 @@ export class Container<Env = unknown> extends (Server as any) {
     if (options) {
       if (options.defaultPort !== undefined) this.defaultPort = options.defaultPort;
       if (options.sleepAfter !== undefined) this.sleepAfter = options.sleepAfter;
-      if (options.explicitContainerStart !== undefined) this.manualStart = options.explicitContainerStart;
+      if (options.explicitContainerStart !== undefined)
+        this.manualStart = options.explicitContainerStart;
+      if (options.startOptions !== undefined) {
+        this.startOptions = options.startOptions;
+      }
     }
 
     // Create schedules table if it doesn't exist
@@ -172,7 +134,7 @@ export class Container<Env = unknown> extends (Server as any) {
    */
   async startContainer(maxTries: number = 10): Promise<void> {
     if (!this.ctx.container) {
-      throw new Error("No container found in context");
+      throw new Error('No container found in context');
     }
 
     // Start the container if it's not running
@@ -184,32 +146,26 @@ export class Container<Env = unknown> extends (Server as any) {
       for (let i = 0; i < maxTries && !containerStarted; i++) {
         try {
           console.log(`Starting container (attempt ${i + 1}/${maxTries})`);
+
           // Only include properties that are defined
-          const startConfig: {
-            env?: Record<string, string>;
-            entrypoint?: string[];
-            enableInternet?: boolean;
-          } = {};
-
-          if (Object.keys(this.env).length > 0) startConfig.env = this.env;
-          if (this.entrypoint) startConfig.entrypoint = this.entrypoint;
-          if (this.enableInternet !== undefined) startConfig.enableInternet = this.enableInternet;
-
-          this.ctx.container.start(startConfig);
+          this.ctx.container.start(this.startOptions ?? { enableInternet: false });
 
           // Set up monitoring only when we start the container
           try {
             // Track container status
-            this.ctx.container.monitor().then(() => {
-              this.onStop();
-            }).catch((error: unknown) => {
-              this.onError(error);
-            });
+            this.ctx.container
+              .monitor()
+              .then(() => {
+                this.onStop();
+              })
+              .catch((error: unknown) => {
+                this.onError(error);
+              });
 
             containerStarted = true;
             break;
           } catch (e) {
-            console.warn("Error setting up container monitor:", e);
+            console.warn('Error setting up container monitor:', e);
             lastError = e;
 
             // If we're not on the last attempt, wait a bit before retrying
@@ -230,7 +186,9 @@ export class Container<Env = unknown> extends (Server as any) {
 
       // If we've tried maxTries times and still couldn't start the container, throw an error
       if (!containerStarted) {
-        throw new Error(`Failed to start container after ${maxTries} attempts: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+        throw new Error(
+          `Failed to start container after ${maxTries} attempts: ${lastError instanceof Error ? lastError.message : String(lastError)}`
+        );
       }
     }
   }
@@ -263,7 +221,7 @@ export class Container<Env = unknown> extends (Server as any) {
    */
   async startAndWaitForPorts(ports?: number | number[], maxTries: number = 10): Promise<void> {
     if (!this.ctx.container) {
-      throw new Error("No container found in context");
+      throw new Error('No container found in context');
     }
 
     // Start the container if it's not running
@@ -300,7 +258,7 @@ export class Container<Env = unknown> extends (Server as any) {
       // Try to connect to the port multiple times
       for (let i = 0; i < maxTries && !portReady; i++) {
         try {
-          await tcpPort.fetch("http://ping");
+          await tcpPort.fetch('http://ping');
 
           // Successfully connected to this port
           portReady = true;
@@ -308,8 +266,10 @@ export class Container<Env = unknown> extends (Server as any) {
         } catch (e) {
           // Check for specific error messages that indicate we should keep retrying
           const errorMessage = e instanceof Error ? e.message : String(e);
-          if (errorMessage.includes("listening") ||
-              errorMessage.includes("there is no container instance")) {
+          if (
+            errorMessage.includes('listening') ||
+            errorMessage.includes('there is no container instance')
+          ) {
             console.log(`Port ${port} not yet ready, retrying...`);
           } else {
             // Log other errors but continue with retries
@@ -318,7 +278,9 @@ export class Container<Env = unknown> extends (Server as any) {
 
           // If we're on the last attempt and the port is still not ready, fail
           if (i === maxTries - 1) {
-            throw new Error(`Failed to verify port ${port} is available after ${maxTries} attempts`);
+            throw new Error(
+              `Failed to verify port ${port} is available after ${maxTries} attempts`
+            );
           }
 
           // Wait a bit before trying again (300ms like in containers-starter-go)
@@ -356,7 +318,7 @@ export class Container<Env = unknown> extends (Server as any) {
     portParam?: number
   ): Promise<Response> {
     if (!this.ctx.container) {
-      throw new Error("No container found in context");
+      throw new Error('No container found in context');
     }
 
     // Parse the arguments based on their types to handle different method signatures
@@ -371,9 +333,13 @@ export class Container<Env = unknown> extends (Server as any) {
     } else {
       // URL-based: containerFetch(url, init?, port?)
       const url = typeof requestOrUrl === 'string' ? requestOrUrl : requestOrUrl.toString();
-      const init = typeof portOrInit === 'number' ? {} : (portOrInit || {});
-      port = typeof portOrInit === 'number' ? portOrInit :
-             typeof portParam === 'number' ? portParam : undefined;
+      const init = typeof portOrInit === 'number' ? {} : portOrInit || {};
+      port =
+        typeof portOrInit === 'number'
+          ? portOrInit
+          : typeof portParam === 'number'
+            ? portParam
+            : undefined;
 
       // Create a Request object
       request = new Request(url, init);
@@ -381,7 +347,9 @@ export class Container<Env = unknown> extends (Server as any) {
 
     // Require a port to be specified, either as a parameter or as a defaultPort property
     if (port === undefined && this.defaultPort === undefined) {
-      throw new Error("No port specified for container fetch. Set defaultPort or specify a port parameter.");
+      throw new Error(
+        'No port specified for container fetch. Set defaultPort or specify a port parameter.'
+      );
     }
 
     // Use specified port or defaultPort
@@ -391,7 +359,10 @@ export class Container<Env = unknown> extends (Server as any) {
       try {
         await this.startAndWaitForPorts(targetPort);
       } catch (e) {
-        return new Response(`Failed to start container: ${e instanceof Error ? e.message : String(e)}`, { status: 500 });
+        return new Response(
+          `Failed to start container: ${e instanceof Error ? e.message : String(e)}`,
+          { status: 500 }
+        );
       }
     }
 
@@ -410,9 +381,9 @@ export class Container<Env = unknown> extends (Server as any) {
         const containerUrl = `http://container/ws`;
         const containerRes = await tcpPort.fetch(containerUrl, {
           headers: {
-            'Upgrade': 'websocket',
-            'Connection': 'Upgrade'
-          }
+            Upgrade: 'websocket',
+            Connection: 'Upgrade',
+          },
         });
 
         // Check if we got a WebSocket from the container
@@ -447,16 +418,19 @@ export class Container<Env = unknown> extends (Server as any) {
 
         // Forward messages from container to client
         // @ts-ignore - The webSocket property is not in the Response type but is provided by PartyKit
-        containerRes.webSocket.addEventListener('message', (event: { data: string | ArrayBufferLike }) => {
-          try {
-            // Renew timeout on activity
-            this.renewActivityTimeout();
-            // Forward message to client
-            serverWs.send(event.data);
-          } catch (e) {
-            console.error('Error forwarding message to client:', e);
+        containerRes.webSocket.addEventListener(
+          'message',
+          (event: { data: string | ArrayBufferLike }) => {
+            try {
+              // Renew timeout on activity
+              this.renewActivityTimeout();
+              // Forward message to client
+              serverWs.send(event.data);
+            } catch (e) {
+              console.error('Error forwarding message to client:', e);
+            }
           }
-        });
+        );
 
         // Handle client closing the connection
         serverWs.addEventListener('close', (event: { code: number; reason: string }) => {
@@ -470,13 +444,16 @@ export class Container<Env = unknown> extends (Server as any) {
 
         // Handle container closing the connection
         // @ts-ignore - The webSocket property is not in the Response type but is provided by PartyKit
-        containerRes.webSocket.addEventListener('close', (event: { code: number; reason: string }) => {
-          try {
-            serverWs.close(event.code, event.reason);
-          } catch (e) {
-            console.error('Error closing client WebSocket:', e);
+        containerRes.webSocket.addEventListener(
+          'close',
+          (event: { code: number; reason: string }) => {
+            try {
+              serverWs.close(event.code, event.reason);
+            } catch (e) {
+              console.error('Error closing client WebSocket:', e);
+            }
           }
-        });
+        );
 
         // Handle errors on both sides
         serverWs.addEventListener('error', (event: any) => {
@@ -503,12 +480,14 @@ export class Container<Env = unknown> extends (Server as any) {
         return new Response(null, {
           status: 101,
           // @ts-ignore - The webSocket property is not in the ResponseInit type but is supported by PartyKit
-          webSocket: clientWs
+          webSocket: clientWs,
         });
       } catch (e) {
         console.error('Error establishing WebSocket connection:', e);
-        return new Response(`Error establishing WebSocket connection: ${e instanceof Error ? e.message : String(e)}`,
-          { status: 500 });
+        return new Response(
+          `Error establishing WebSocket connection: ${e instanceof Error ? e.message : String(e)}`,
+          { status: 500 }
+        );
       }
     } else {
       // Handle regular HTTP request
@@ -523,8 +502,11 @@ export class Container<Env = unknown> extends (Server as any) {
         await this.renewActivityTimeout();
         return await tcpPort.fetch(containerUrl, request);
       } catch (e) {
-        console.error("Error proxying request to container:", e);
-        return new Response(`Error proxying request to container: ${e instanceof Error ? e.message : String(e)}`, { status: 500 });
+        console.error('Error proxying request to container:', e);
+        return new Response(
+          `Error proxying request to container: ${e instanceof Error ? e.message : String(e)}`,
+          { status: 500 }
+        );
       }
     }
   }
@@ -540,7 +522,7 @@ export class Container<Env = unknown> extends (Server as any) {
     // Cancel any pending sleep timeout
     await this.#cancelSleepTimeout();
 
-    this.ctx.container.destroy(reason || "Container stopped requested");
+    this.ctx.container.destroy(reason || 'Container stopped requested');
 
     // Call stop handler
     this.onStop();
@@ -567,7 +549,7 @@ export class Container<Env = unknown> extends (Server as any) {
    * Override this method in subclasses to handle container errors
    */
   onError(error: unknown): any {
-    console.error("Container error:", error);
+    console.error('Container error:', error);
     throw error;
   }
 
@@ -604,10 +586,14 @@ export class Container<Env = unknown> extends (Server as any) {
 
         // Convert to seconds based on unit
         switch (unit) {
-          case 's': return value;
-          case 'm': return value * 60;
-          case 'h': return value * 60 * 60;
-          default: return 300;
+          case 's':
+            return value;
+          case 'm':
+            return value * 60;
+          case 'h':
+            return value * 60 * 60;
+          default:
+            return 300;
         }
       }
     } else {
@@ -628,7 +614,7 @@ export class Container<Env = unknown> extends (Server as any) {
     await this.#cancelSleepTimeout();
 
     // Schedule the Container stopped
-    const { id } = await this.schedule(timeoutInSeconds, "stopDueToInactivity");
+    const { id } = await this.schedule(timeoutInSeconds, 'stopDueToInactivity');
     this.#sleepTimeoutTaskId = id;
   }
 
@@ -663,12 +649,12 @@ export class Container<Env = unknown> extends (Server as any) {
     const id = nanoid(9);
 
     // Ensure the callback is a string (method name)
-    if (typeof callback !== "string") {
-      throw new Error("Callback must be a string (method name)");
+    if (typeof callback !== 'string') {
+      throw new Error('Callback must be a string (method name)');
     }
 
     // Ensure the method exists
-    if (typeof this[callback] !== "function") {
+    if (typeof this[callback] !== 'function') {
       throw new Error(`this.${callback} is not a function`);
     }
 
@@ -689,9 +675,9 @@ export class Container<Env = unknown> extends (Server as any) {
         callback: callback,
         payload: payload as T,
         time: timestamp,
-        type: "scheduled",
+        type: 'scheduled',
       };
-    } else if (typeof when === "number") {
+    } else if (typeof when === 'number') {
       // Schedule for a delay in seconds
       const time = Math.floor(Date.now() / 1000 + when);
 
@@ -708,7 +694,7 @@ export class Container<Env = unknown> extends (Server as any) {
         payload: payload as T,
         delayInSeconds: when,
         time,
-        type: "delayed",
+        type: 'delayed',
       };
     } else {
       throw new Error("Invalid schedule type. 'when' must be a Date or number of seconds");
@@ -728,7 +714,7 @@ export class Container<Env = unknown> extends (Server as any) {
       LIMIT 1
     `;
 
-    if (result.length > 0 && "time" in result[0]) {
+    if (result.length > 0 && 'time' in result[0]) {
       const nextTime = (result[0].time as number) * 1000;
       await this.ctx.storage.setAlarm(nextTime);
     }
@@ -788,7 +774,7 @@ export class Container<Env = unknown> extends (Server as any) {
         payload,
         type: 'delayed',
         time: schedule.time,
-        delayInSeconds: schedule.delayInSeconds!
+        delayInSeconds: schedule.delayInSeconds!,
       };
     } else {
       return {
@@ -796,7 +782,7 @@ export class Container<Env = unknown> extends (Server as any) {
         callback: schedule.callback,
         payload,
         type: 'scheduled',
-        time: schedule.time
+        time: schedule.time,
       };
     }
   }
@@ -815,28 +801,28 @@ export class Container<Env = unknown> extends (Server as any) {
     } = {}
   ): Schedule<T>[] {
     // Build the query dynamically based on criteria
-    let query = "SELECT * FROM container_schedules WHERE 1=1";
+    let query = 'SELECT * FROM container_schedules WHERE 1=1';
     const params: (string | number)[] = [];
 
     // Add filters for each criterion
     if (criteria.id) {
-      query += " AND id = ?";
+      query += ' AND id = ?';
       params.push(criteria.id);
     }
 
     if (criteria.type) {
-      query += " AND type = ?";
+      query += ' AND type = ?';
       params.push(criteria.type);
     }
 
     if (criteria.timeRange) {
       if (criteria.timeRange.start) {
-        query += " AND time >= ?";
+        query += ' AND time >= ?';
         params.push(Math.floor(criteria.timeRange.start.getTime() / 1000));
       }
 
       if (criteria.timeRange.end) {
-        query += " AND time <= ?";
+        query += ' AND time <= ?';
         params.push(Math.floor(criteria.timeRange.end.getTime() / 1000));
       }
     }
@@ -861,7 +847,7 @@ export class Container<Env = unknown> extends (Server as any) {
           payload,
           type: 'delayed',
           time: row.time as number,
-          delayInSeconds: row.delayInSeconds as number
+          delayInSeconds: row.delayInSeconds as number,
         };
       } else {
         return {
@@ -869,7 +855,7 @@ export class Container<Env = unknown> extends (Server as any) {
           callback: row.callback as string,
           payload,
           type: 'scheduled',
-          time: row.time as number
+          time: row.time as number,
         };
       }
     });
@@ -910,17 +896,7 @@ export class Container<Env = unknown> extends (Server as any) {
           // Parse the payload and execute the callback
           const payload = row.payload ? JSON.parse(row.payload) : undefined;
 
-          // Use context storage to execute the callback with proper 'this' binding
-          await containerContext.run(
-            {
-              container: this,
-              connection: undefined,
-              request: undefined
-            },
-            async () => {
-              await callback.call(this, payload, await schedule);
-            }
-          );
+          await callback.call(this, payload, await schedule);
         } catch (e) {
           console.error(`Error executing scheduled callback "${row.callback}":`, e);
         }
@@ -952,9 +928,8 @@ export class Container<Env = unknown> extends (Server as any) {
     this.#sleepTimeoutTaskId = null;
 
     // Stop the container if it's still running
-    this.stopContainer("Container shut down due to inactivity timeout");
+    this.stopContainer('Container shut down due to inactivity timeout');
   }
-
 
   /**
    * Handle fetch requests to the Container
@@ -970,7 +945,7 @@ export class Container<Env = unknown> extends (Server as any) {
     // Check if default port is set
     if (this.defaultPort === undefined) {
       return new Response(
-        "No default port configured for this container. Override the fetch method or set defaultPort in your Container subclass.",
+        'No default port configured for this container. Override the fetch method or set defaultPort in your Container subclass.',
         { status: 500 }
       );
     }

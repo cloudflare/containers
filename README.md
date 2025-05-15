@@ -187,21 +187,20 @@ export class ConfiguredContainer extends Container {
   // Set the timeout for sleeping the container after inactivity
   sleepAfter = "2h";
 
-  // Environment variables to pass to the container
-  env = {
-    NODE_ENV: 'production',
-    LOG_LEVEL: 'info',
-    APP_PORT: '9000'
-  };
-
-  // Custom entrypoint to run in the container
-  entrypoint = ['node', 'server.js', '--config', 'production.json'];
-
-  // Enable internet access for the container
-  enableInternet = true;
-
   // These configuration properties will be used automatically
   // when the container starts
+  startOptions = {
+    // Environment variables to pass to the container
+    env: {
+      NODE_ENV: 'production',
+      LOG_LEVEL: 'info',
+      APP_PORT: '9000',
+    },
+    // Pass a custom entrypoint for the container
+    entrypoint: ['node', 'server.js', '--config', 'production.json'];
+    // Enable internet access for the container
+    enableInternet: true,
+  };
 }
 ```
 
