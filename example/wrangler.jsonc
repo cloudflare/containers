@@ -1,6 +1,6 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "container-example",
+	"name": "container-example-class",
 	"main": "src/index.ts",
 	"compatibility_date": "2025-05-06",
 	"compatibility_flags": [
@@ -14,13 +14,13 @@
       "class_name": "MyContainer",
       "image": "./Dockerfile",
       "max_instances": 10,
-      "name": "container-package-example"
+      "name": "container-package-class"
     }
   ],
   "durable_objects": {
-		"bindings": [
-			{
-				"class_name": "MyContainer",
+	"bindings": [
+	  {
+		"class_name": "MyContainer",
         "name": "MY_CONTAINER"
       }
     ]

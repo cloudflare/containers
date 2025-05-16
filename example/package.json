@@ -11,7 +11,7 @@
 	"devDependencies": {
 		"@cloudflare/workers-types": "^4.20250506.0",
 		"typescript": "^5.5.2",
-		"wrangler": "https://prerelease-registry.devprod.cloudflare.dev/workers-sdk/runs/14848233375/npm-package-wrangler-8985"
+		"wrangler": "^4.14.4"
 	},
 	"dependencies": {
 		"cf-containers": "0.0.2"

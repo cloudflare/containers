@@ -1,4 +1,3 @@
-import { Server } from 'partyserver';
 import { nanoid } from 'nanoid';
 import type { ContainerOptions, ContainerStartOptions, Schedule } from '../types';
 import { DurableObject } from 'cloudflare:workers';
