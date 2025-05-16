@@ -81,7 +81,7 @@ function getExitCodeFromError(error: unknown): number | null {
 /**
  * Main Container class that wraps PartyKit's Server with container functionality
  */
-export class Container<Env = unknown> extends Server<Env> {
+export class Container<Env = unknown> extends DurableObject {
   // Default port for the container (undefined means no default port)
   defaultPort?: number;
 
@@ -577,7 +577,7 @@ export class Container<Env = unknown> extends Server<Env> {
    * @param payload Data to pass to the callback
    * @returns Schedule object representing the scheduled task
    */
-  override async schedule<T = string>(
+  async schedule<T = string>(
     when: Date | number,
     callback: string,
     payload?: T
@@ -645,9 +645,10 @@ export class Container<Env = unknown> extends Server<Env> {
    */
   async #scheduleNextAlarm(): Promise<void> {
     const existingAlarm = await this.ctx.storage.getAlarm();
+    const nextTime = 1000 + Date.now();
+
     // if not already set
-    if (existingAlarm === null || existingAlarm > Date.now() + 1000) {
-      const nextTime = 1000 + Date.now();
+    if (existingAlarm === null || existingAlarm > nextTime || existingAlarm < Date.now()) {
       await this.ctx.storage.setAlarm(nextTime);
       await this.ctx.storage.sync();
     }
@@ -657,7 +658,7 @@ export class Container<Env = unknown> extends Server<Env> {
    * Cancel a scheduled task
    * @param id ID of the task to cancel
    */
-  override async unschedule(id: string): Promise<void> {
+  async unschedule(id: string): Promise<void> {
     // Delete the schedule from the database
     this.sql`DELETE FROM container_schedules WHERE id = ${id}`;
 
@@ -788,8 +789,9 @@ export class Container<Env = unknown> extends Server<Env> {
    * Method called when an alarm fires
    * Executes any scheduled tasks that are due
    */
-  async alarm(alarmProps: { isRetry: boolean; retryCount: number }): Promise<void> {
+  override async alarm(alarmProps: { isRetry: boolean; retryCount: number }): Promise<void> {
     const maxRetries = 3;
+
     //
     // maxRetries before scheduling next alarm is purposely set to 3,
     // as according to DO docs at https://developers.cloudflare.com/durable-objects/api/alarms/
@@ -839,6 +841,11 @@ export class Container<Env = unknown> extends Server<Env> {
 
         // Delete the schedule after execution (one-time schedules)
         this.sql`DELETE FROM container_schedules WHERE id = ${row.id}`;
+      }
+
+      // if not running and nothing to do, stop
+      if (!this.container.running) {
+        return;
       }
 
       // Schedule the next alarm
@@ -895,7 +902,7 @@ export class Container<Env = unknown> extends Server<Env> {
    *
    * @param request The request to handle
    */
-  async fetch(request: Request): Promise<Response> {
+  override async fetch(request: Request): Promise<Response> {
     // Check if default port is set
     if (this.defaultPort === undefined) {
       return new Response(

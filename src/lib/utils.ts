@@ -1,8 +1,4 @@
-/**
- * Utility functions for container operations
- */
-
-import type { Container } from "./container";
+import type { Container } from './container';
 
 /**
  * Load balance requests across multiple container instances
@@ -11,9 +7,9 @@ import type { Container } from "./container";
  * @returns A container stub ready to handle requests
  */
 export async function loadBalance<T extends Container>(
-  binding: DurableObjectNamespace,
+  binding: DurableObjectNamespace<T>,
   instances: number = 3
-): Promise<DurableObjectStub> {
+): Promise<DurableObjectStub<T>> {
   // Generate a random ID within the range of instances
   const id = Math.floor(Math.random() * instances).toString();
 
@@ -22,5 +18,13 @@ export async function loadBalance<T extends Container>(
   const objectId = binding.idFromName(`instance-${id}`);
 
   // Return the stub for the selected instance
+  return binding.get(objectId);
+}
+
+export const singletonContainerId = 'cf-singleton-container';
+export function getContainer<T extends Container>(
+  binding: DurableObjectNamespace<T>
+): DurableObjectStub<T> {
+  const objectId = binding.idFromName(singletonContainerId);
   return binding.get(objectId);
 }
