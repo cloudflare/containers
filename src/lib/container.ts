@@ -1,6 +1,6 @@
 import { nanoid } from 'nanoid';
 import type { ContainerOptions, ContainerStartOptions, Schedule } from '../types';
-import { DurableObject } from 'cloudflare:workers';
+import { type DurableObject } from 'cloudflare:workers';
 
 /**
  * Params sent to `onStop` method when the container stops
@@ -80,7 +80,13 @@ function getExitCodeFromError(error: unknown): number | null {
 /**
  * Main Container class that wraps PartyKit's Server with container functionality
  */
-export class Container<Env = unknown> extends DurableObject {
+export class Container<Env = unknown> {
+  ctx: DurableObject['ctx'];
+  env: Env;
+
+  // @ts-ignore
+  public __DURABLE_OBJECT_BRAND: never;
+
   // Default port for the container (undefined means no default port)
   defaultPort?: number;
 
@@ -98,7 +104,7 @@ export class Container<Env = unknown> extends DurableObject {
    * Set these properties directly in your container instance
    */
   envVars: ContainerStartOptions['env'] = {};
-  entrypoint?: ContainerStartOptions['entrypoint'];
+  entrypoint: ContainerStartOptions['entrypoint'];
   enableInternet: ContainerStartOptions['enableInternet'] = true;
 
   /**
@@ -124,7 +130,9 @@ export class Container<Env = unknown> extends DurableObject {
   private container: NonNullable<DurableObject['ctx']['container']>;
 
   constructor(ctx: DurableObject['ctx'], env: Env, options?: ContainerOptions) {
-    super(ctx, env);
+    this.ctx = ctx;
+    this.env = env;
+
     this.ctx.blockConcurrencyWhile(async () => {
       // First thing, schedule the next alarms
       await this.#scheduleNextAlarm();
@@ -218,11 +226,12 @@ export class Container<Env = unknown> extends DurableObject {
 
     for (;;) {
       // Only include properties that are defined
-      const startConfig: ContainerStartOptions = {};
+      const startConfig: ContainerStartOptions = {
+        enableInternet: this.enableInternet,
+      };
 
-      if (Object.keys(this.envVars).length > 0) startConfig.env = this.envVars;
+      if (this.envVars && Object.keys(this.envVars).length > 0) startConfig.env = this.envVars;
       if (this.entrypoint) startConfig.entrypoint = this.entrypoint;
-      if (this.enableInternet !== undefined) startConfig.enableInternet = this.enableInternet;
 
       await this.#cancelSleepTimeout();
       this.container.start(startConfig);
@@ -254,14 +263,17 @@ export class Container<Env = unknown> extends DurableObject {
         });
 
       const port = this.container.getTcpPort(33);
-      let lastError;
       try {
         await port.fetch('http://containerstarthealthcheck');
         return;
       } catch (error) {
         if (isNotListeningError(error)) return;
 
-        lastError = error;
+        console.warn(
+          'Error hitting port 33 to check if container is ready:',
+          error instanceof Error ? error.message : String(error)
+        );
+
         await new Promise(res => setTimeout(res, 500));
         continue;
       }
@@ -788,7 +800,7 @@ export class Container<Env = unknown> extends DurableObject {
    * Method called when an alarm fires
    * Executes any scheduled tasks that are due
    */
-  override async alarm(alarmProps: { isRetry: boolean; retryCount: number }): Promise<void> {
+  async alarm(alarmProps: { isRetry: boolean; retryCount: number }): Promise<void> {
     const maxRetries = 3;
 
     //
@@ -901,7 +913,7 @@ export class Container<Env = unknown> extends DurableObject {
    *
    * @param request The request to handle
    */
-  override async fetch(request: Request): Promise<Response> {
+  async fetch(request: Request): Promise<Response> {
     // Check if default port is set
     if (this.defaultPort === undefined) {
       return new Response(
@@ -913,4 +925,14 @@ export class Container<Env = unknown> extends DurableObject {
     // Forward all requests (HTTP and WebSocket) to the container
     return await this.containerFetch(request, this.defaultPort);
   }
+
+  // rest of DO methods
+  webSocketMessage?(ws: WebSocket, message: string | ArrayBuffer): void | Promise<void>;
+  webSocketClose?(
+    ws: WebSocket,
+    code: number,
+    reason: string,
+    wasClean: boolean
+  ): void | Promise<void>;
+  webSocketError?(ws: WebSocket, error: unknown): void | Promise<void>;
 }

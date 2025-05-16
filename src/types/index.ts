@@ -1,14 +1,14 @@
 /**
  * Basic types for the container implementation
  */
-
+import { type DurableObject } from 'cloudflare:workers';
 import type { Party, Connection } from 'partyserver';
 
 /**
  * ContainerStartOptions as they come from worker types
  */
-export type ContainerStartOptions = Partial<
-  NonNullable<Parameters<NonNullable<DurableObject['ctx']['container']>['start']>[0]>
+export type ContainerStartOptions = NonNullable<
+  Parameters<NonNullable<DurableObject['ctx']['container']>['start']>[0]
 >;
 
 /**
