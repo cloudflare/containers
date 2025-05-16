@@ -1,4 +1,4 @@
-import { Container, loadBalance, getContainer } from 'cf-containers';
+import { Container, loadBalance, getContainer } from '../../src/index';
 
 export class MyContainer extends Container {
   defaultPort = 8080;
