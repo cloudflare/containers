@@ -2,7 +2,14 @@
  * Basic types for the container implementation
  */
 
-import type { Party, Connection } from "partyserver";
+import type { Party, Connection } from 'partyserver';
+
+/**
+ * ContainerStartOptions as they come from worker types
+ */
+export type ContainerStartOptions = Partial<
+  NonNullable<Parameters<NonNullable<DurableObject['ctx']['container']>['start']>[0]>
+>;
 
 /**
  * Message structure for communication with containers
@@ -38,7 +45,7 @@ export interface ContainerOptions {
 
   /** If true, container won't be started automatically when the durable object starts */
   explicitContainerStart?: boolean;
-  
+
   /** If true, container won't be started automatically when the durable object starts (preferred over explicitContainerStart) */
   manualStart?: boolean;
 }
@@ -64,7 +71,7 @@ export type ContainerEventHandler = () => void | Promise<void>;
  */
 export type Schedule<T = string> = {
   /** Unique identifier for the schedule */
-  id: string;
+  taskId: string;
   /** Name of the method to be called */
   callback: string;
   /** Data to be passed to the callback */
@@ -72,17 +79,16 @@ export type Schedule<T = string> = {
 } & (
   | {
       /** Type of schedule for one-time execution at a specific time */
-      type: "scheduled";
+      type: 'scheduled';
       /** Timestamp when the task should execute */
       time: number;
     }
   | {
       /** Type of schedule for delayed execution */
-      type: "delayed";
+      type: 'delayed';
       /** Timestamp when the task should execute */
       time: number;
       /** Number of seconds to delay execution */
       delayInSeconds: number;
     }
 );
-

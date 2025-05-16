@@ -1,3 +1,5 @@
+import { type DurableObject } from 'cloudflare:workers';
+
 /**
  * Type declarations for Cloudflare Workers and PartyKit types
  */
@@ -25,38 +27,24 @@ declare module 'partyserver' {
     broadcast(message: string | ArrayBufferLike, ignore?: string[]): void;
 
     // Scheduled task methods
-    schedule(delaySeconds: number, methodName: string, data?: any): Promise<{taskId: string}>;
+    schedule(delaySeconds: number, methodName: string, data?: any): Promise<{ taskId: string }>;
     unschedule(taskId: string): Promise<void>;
 
-    ctx: {
-      storage: {
-        sql: {
-          exec(query: string, ...params: any[]): any[];
-        };
-      };
-      blockConcurrencyWhile(fn: () => Promise<void>): void;
-      container?: {
-        running: boolean;
-        start(options?: {
-          env?: Record<string, string>;
-          entrypoint?: string[];
-          enableInternet?: boolean;
-        }): void;
-        destroy(reason?: string): void;
-        monitor(): Promise<void>;
-        getTcpPort(port: number): {
-          fetch(url: string, init?: RequestInit): Promise<Response>;
-        };
-      };
-    };
+    ctx: DurableObject['ctx'];
   }
 
   export interface WebSocket {
     accept(): void;
     send(message: string | ArrayBufferLike): void;
     close(code?: number, reason?: string): void;
-    addEventListener(type: 'message', handler: (event: { data: string | ArrayBufferLike }) => void): void;
-    addEventListener(type: 'close', handler: (event: { code: number; reason: string }) => void): void;
+    addEventListener(
+      type: 'message',
+      handler: (event: { data: string | ArrayBufferLike }) => void
+    ): void;
+    addEventListener(
+      type: 'close',
+      handler: (event: { code: number; reason: string }) => void
+    ): void;
     addEventListener(type: 'error', handler: (event: any) => void): void;
   }
 
