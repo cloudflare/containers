@@ -188,7 +188,7 @@ class ContainerState {
 /**
  * Main Container class
  */
-export class Container<Env = unknown> extends DurableObject {
+export class Container<Env = unknown> extends DurableObject<Env> {
   // Default port for the container (undefined means no default port)
   defaultPort?: number;
 
