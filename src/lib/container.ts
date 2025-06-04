@@ -322,16 +322,14 @@ export class Container<Env = unknown> extends DurableObject {
     this.setupMonitor();
   }
 
-  async #startContainerIfNotRunning(
-    options?: ContainerStartConfigOptions
-  ): Promise<Promise<unknown>> {
+  async #startContainerIfNotRunning(options?: ContainerStartConfigOptions): Promise<void> {
     // Start the container if it's not running
     if (this.container.running) {
       if (!this.monitor) {
         this.monitor = this.container.monitor();
       }
 
-      return this.monitor;
+      return;
     }
 
     await this.state.setRunning();
@@ -385,7 +383,7 @@ export class Container<Env = unknown> extends DurableObject {
       const port = this.container.getTcpPort(33);
       try {
         await port.fetch('http://containerstarthealthcheck');
-        return this.monitor;
+        return;
       } catch (error) {
         if (isNotListeningError(error) && this.container.running) {
           return;
