@@ -1,6 +1,6 @@
 {
   "name": "@cloudflare/containers",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "TypeScript helper class for PartyKit durable object containers",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
