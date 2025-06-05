@@ -34,6 +34,32 @@ export function isNoInstanceError(error: unknown): boolean {
   );
 }
 
+function attachOnClosedHook(stream: ReadableStream, onClosed: () => void): ReadableStream {
+  let destructor: (() => void) | null = () => {
+    onClosed();
+    destructor = null;
+  };
+
+  // we pass the readableStream through a transform stream to detect if the
+  // body has been closed.
+  const transformStream = new TransformStream({
+    transform(chunk, controller) {
+      controller.enqueue(chunk);
+    },
+    flush() {
+      if (destructor) {
+        destructor();
+      }
+    },
+    cancel() {
+      if (destructor) {
+        destructor();
+      }
+    },
+  });
+  return stream.pipeThrough(transformStream);
+}
+
 export function isRuntimeSignalledError(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
@@ -687,15 +713,35 @@ export class Container<Env = unknown> extends DurableObject {
       // Renew the activity timeout whenever a request is proxied
       this.renewActivityTimeout();
 
+      if (request.body != null) {
+        this.openStreamCount++;
+        const destructor = () => {
+          this.openStreamCount--;
+          this.renewActivityTimeout();
+        };
+
+        const readable = attachOnClosedHook(request.body, destructor);
+        request = new Request(request, { body: readable });
+      }
+
       const res = await tcpPort.fetch(containerUrl, request);
       if (res.webSocket) {
-        this.websocketCount++;
+        this.openStreamCount++;
         res.webSocket.addEventListener('close', async () => {
-          this.websocketCount--;
-          if (this.websocketCount === 0) {
+          this.openStreamCount--;
+          if (this.openStreamCount === 0) {
             await this.#scheduleSleepTimeout();
           }
         });
+      } else if (res.body != null) {
+        this.openStreamCount++;
+        const destructor = () => {
+          this.openStreamCount--;
+          this.renewActivityTimeout();
+        };
+
+        const readable = attachOnClosedHook(res.body, destructor);
+        return new Response(readable, res);
       }
 
       return res;
@@ -709,7 +755,7 @@ export class Container<Env = unknown> extends DurableObject {
   }
 
   // websocketCount keeps track of the number of websocket connections to the container
-  private websocketCount = 0;
+  private openStreamCount = 0;
 
   /**
    * Shuts down the container.
@@ -1177,7 +1223,7 @@ export class Container<Env = unknown> extends DurableObject {
       return;
     }
 
-    if (this.websocketCount > 0) {
+    if (this.openStreamCount > 0) {
       return;
     }
 
