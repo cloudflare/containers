@@ -282,8 +282,13 @@ export class Container<Env = unknown> extends DurableObject {
     // Start the container automatically if needed
     this.ctx.blockConcurrencyWhile(async () => {
       if (this.shouldAutoStart()) {
+        const timeout = AbortSignal.timeout(25_000);
+
         // Start container and wait for any required ports
-        await this.startAndWaitForPorts();
+        await this.startAndWaitForPorts([], {
+          abort: timeout,
+        });
+
         // Activity timeout is initialized in startAndWaitForPorts
       } else if (this.container.running && !this.monitor) {
         this.monitor = this.container.monitor();
@@ -546,7 +551,10 @@ export class Container<Env = unknown> extends DurableObject {
    * @param maxTries - Maximum number of attempts to connect to each port before failing
    * @throws Error if port checks fail after maxTries attempts
    */
-  async startAndWaitForPorts(ports?: number | number[], maxTries: number = 10): Promise<void> {
+  async startAndWaitForPorts(
+    ports?: number | number[],
+    cancellationOptions?: { abort?: AbortSignal; retries?: number; waitInterval?: number }
+  ): Promise<void> {
     const state = await this.state.getState();
     if (state.status === 'healthy' && this.container.running) {
       if (this.container.running && !this.monitor) {
@@ -557,8 +565,20 @@ export class Container<Env = unknown> extends DurableObject {
       return;
     }
 
+    cancellationOptions ??= {};
+    const options = {
+      abort: cancellationOptions.abort,
+      retries: cancellationOptions.retries ?? Infinity,
+      waitInterval: cancellationOptions.waitInterval ?? 500,
+    };
+
     // trigger all onStop that we didn't do yet
     await this.#syncPendingStoppedEvents();
+    const abortedSignal = new Promise(res => {
+      options.abort?.addEventListener('abort', () => {
+        res(true);
+      });
+    });
 
     await this.ctx.blockConcurrencyWhile(async () => {
       // Start the container if it's not running
@@ -584,9 +604,9 @@ export class Container<Env = unknown> extends DurableObject {
         let portReady = false;
 
         // Try to connect to the port multiple times
-        for (let i = 0; i < maxTries && !portReady; i++) {
+        for (let i = 0; i < options.retries && !portReady; i++) {
           try {
-            await tcpPort.fetch('http://ping');
+            await tcpPort.fetch('http://ping', { signal: options.abort });
 
             // Successfully connected to this port
             portReady = true;
@@ -611,17 +631,26 @@ export class Container<Env = unknown> extends DurableObject {
             }
 
             // If we're on the last attempt and the port is still not ready, fail
-            if (i === maxTries - 1) {
+            if (i === options.retries - 1) {
               try {
                 this.onError(
-                  `Failed to verify port ${port} is available after ${maxTries} attempts, last error: ${errorMessage}`
+                  `Failed to verify port ${port} is available after ${options.retries} attempts, last error: ${errorMessage}`
                 );
               } catch {}
               throw e;
             }
 
             // Wait a bit before trying again (300ms like in containers-starter-go)
-            await new Promise(resolve => setTimeout(resolve, 300));
+            await Promise.any([
+              new Promise(resolve => setTimeout(resolve, options.waitInterval)),
+              abortedSignal,
+            ]);
+
+            if (options.abort?.aborted) {
+              throw new Error(
+                'Received signal to abort request, we timed out waiting for the container to start'
+              );
+            }
           }
         }
       }
@@ -695,7 +724,7 @@ export class Container<Env = unknown> extends DurableObject {
     const state = await this.state.getState();
     if (!this.container.running || state.status !== 'healthy') {
       try {
-        await this.startAndWaitForPorts(targetPort);
+        await this.startAndWaitForPorts(targetPort, { abort: request.signal });
       } catch (e) {
         return new Response(
           `Failed to start container: ${e instanceof Error ? e.message : String(e)}`,
