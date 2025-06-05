@@ -783,7 +783,7 @@ export class Container<Env = unknown> extends DurableObject {
     }
   }
 
-  // websocketCount keeps track of the number of websocket connections to the container
+  // openStreamCount keeps track of the number of open streams to the container
   private openStreamCount = 0;
 
   /**
