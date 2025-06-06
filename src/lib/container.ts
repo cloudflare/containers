@@ -200,9 +200,6 @@ export class Container<Env = unknown> extends DurableObject {
 
   #sleepAfterMs = 0;
 
-  // Internal tracking for sleep timeout task
-  #sleepTimeoutTaskId: string | null = null;
-
   // Whether to require manual container start (if true, it won't start automatically)
   manualStart = false;
 
@@ -348,12 +345,30 @@ export class Container<Env = unknown> extends DurableObject {
    * @returns A promise that resolves when the container start command has been issued
    * @throws Error if no container context is available or if all start attempts fail
    */
-  async startContainer(options?: ContainerStartConfigOptions): Promise<void> {
-    await this.#startContainerIfNotRunning(options);
+  async startContainer(
+    options?: ContainerStartConfigOptions,
+    waitOptions?: { signal?: AbortSignal }
+  ): Promise<void> {
+    await this.#startContainerIfNotRunning(
+      {
+        abort: waitOptions?.signal,
+        waitInterval: 300,
+        retries: Infinity,
+      },
+      options
+    );
+
     this.setupMonitor();
   }
 
-  async #startContainerIfNotRunning(options?: ContainerStartConfigOptions): Promise<void> {
+  async #startContainerIfNotRunning(
+    waitOptions: {
+      abort?: AbortSignal;
+      retries: number;
+      waitInterval: number;
+    },
+    options?: ContainerStartConfigOptions
+  ): Promise<void> {
     // Start the container if it's not running
     if (this.container.running) {
       if (!this.monitor) {
@@ -363,8 +378,14 @@ export class Container<Env = unknown> extends DurableObject {
       return;
     }
 
+    const abortedSignal = new Promise(res => {
+      waitOptions.abort?.addEventListener('abort', () => {
+        res(true);
+      });
+    });
+
     await this.state.setRunning();
-    for (let tries = 0; ; tries++) {
+    for (let tries = 0; tries < waitOptions.retries; tries++) {
       // Use provided options or fall back to instance properties
       const envVars = options?.envVars ?? this.envVars;
       const entrypoint = options?.entrypoint ?? this.entrypoint;
@@ -378,8 +399,7 @@ export class Container<Env = unknown> extends DurableObject {
       if (envVars && Object.keys(envVars).length > 0) startConfig.env = envVars;
       if (entrypoint) startConfig.entrypoint = entrypoint;
 
-      await this.#cancelSleepTimeout();
-
+      this.renewActivityTimeout();
       const handleError = async () => {
         const err = await this.monitor?.catch(err => err as Error);
 
@@ -411,9 +431,10 @@ export class Container<Env = unknown> extends DurableObject {
       }
 
       this.renewActivityTimeout();
+      await this.#scheduleNextAlarm();
       const port = this.container.getTcpPort(33);
       try {
-        await port.fetch('http://containerstarthealthcheck');
+        await port.fetch('http://containerstarthealthcheck', { signal: waitOptions.abort });
         return;
       } catch (error) {
         if (isNotListeningError(error) && this.container.running) {
@@ -433,7 +454,17 @@ export class Container<Env = unknown> extends DurableObject {
           error instanceof Error ? error.message : String(error)
         );
 
-        await new Promise(res => setTimeout(res, 500));
+        await Promise.any([
+          new Promise(res => setTimeout(res, waitOptions.waitInterval)),
+          abortedSignal,
+        ]);
+
+        if (waitOptions.abort?.aborted) {
+          throw new Error(
+            'Aborted waiting for container to start as we received a cancellation signal'
+          );
+        }
+
         continue;
       }
     }
@@ -492,10 +523,24 @@ export class Container<Env = unknown> extends DurableObject {
     }
   }
 
+  monitorSetup = false;
+
   private setupMonitor() {
+    if (this.monitorSetup) {
+      return;
+    }
+
+    this.monitorSetup = true;
     this.monitor
       ?.then(async () => {
+        const state = await this.state.getState();
         await this.ctx.blockConcurrencyWhile(async () => {
+          const newState = await this.state.getState();
+          // already informed
+          if (newState.status !== state.status) {
+            return;
+          }
+
           await this.state.setStoppedWithCode(0);
           await this.onStop({ exitCode: 0, reason: 'exit' });
           await this.state.setStopped();
@@ -509,12 +554,20 @@ export class Container<Env = unknown> extends DurableObject {
 
         const exitCode = getExitCodeFromError(error);
         if (exitCode !== null) {
+          const state = await this.state.getState();
           this.ctx.blockConcurrencyWhile(async () => {
+            const newState = await this.state.getState();
+            // already informed
+            if (newState.status !== state.status) {
+              return;
+            }
+
             await this.state.setStoppedWithCode(exitCode);
             await this.onStop({
               exitCode,
               reason: isRuntimeSignalledError(error) ? 'runtime_signal' : 'exit',
             });
+
             await this.state.setStopped();
           });
 
@@ -527,6 +580,7 @@ export class Container<Env = unknown> extends DurableObject {
         } catch {}
       })
       .finally(() => {
+        this.monitorSetup = false;
         this.alarmSleepResolve('monitor finally');
       });
   }
@@ -556,14 +610,6 @@ export class Container<Env = unknown> extends DurableObject {
     cancellationOptions?: { abort?: AbortSignal; retries?: number; waitInterval?: number }
   ): Promise<void> {
     const state = await this.state.getState();
-    if (state.status === 'healthy' && this.container.running) {
-      if (this.container.running && !this.monitor) {
-        await this.#startContainerIfNotRunning();
-        this.setupMonitor();
-      }
-
-      return;
-    }
 
     cancellationOptions ??= {};
     const options = {
@@ -571,6 +617,15 @@ export class Container<Env = unknown> extends DurableObject {
       retries: cancellationOptions.retries ?? Infinity,
       waitInterval: cancellationOptions.waitInterval ?? 500,
     };
+
+    if (state.status === 'healthy' && this.container.running) {
+      if (this.container.running && !this.monitor) {
+        await this.#startContainerIfNotRunning(options);
+        this.setupMonitor();
+      }
+
+      return;
+    }
 
     // trigger all onStop that we didn't do yet
     await this.#syncPendingStoppedEvents();
@@ -582,7 +637,7 @@ export class Container<Env = unknown> extends DurableObject {
 
     await this.ctx.blockConcurrencyWhile(async () => {
       // Start the container if it's not running
-      await this.#startContainerIfNotRunning();
+      await this.#startContainerIfNotRunning(options);
 
       // Determine which ports to check
       let portsToCheck: number[] = [];
@@ -758,9 +813,7 @@ export class Container<Env = unknown> extends DurableObject {
         this.openStreamCount++;
         res.webSocket.addEventListener('close', async () => {
           this.openStreamCount--;
-          if (this.openStreamCount === 0) {
-            await this.#scheduleSleepTimeout();
-          }
+          this.renewActivityTimeout();
         });
       } else if (res.body != null) {
         this.openStreamCount++;
@@ -873,38 +926,6 @@ export class Container<Env = unknown> extends DurableObject {
     }
 
     throw new Error(`invalid type for a time expression: ${typeof timeExpression}`);
-  }
-
-  /**
-   * Schedule a Container stopped after the specified sleep timeout
-   * @private
-   */
-  async #scheduleSleepTimeout(): Promise<void> {
-    // Convert the sleepAfter value to seconds
-    const timeoutInSeconds = this.#parseTimeExpression(this.sleepAfter);
-
-    // Cancel any existing timeout
-    await this.#cancelSleepTimeout();
-
-    // Schedule the Container stopped
-    const { taskId } = await this.schedule(timeoutInSeconds, 'stopDueToInactivity');
-    this.#sleepTimeoutTaskId = taskId;
-  }
-
-  /**
-   * Cancel the scheduled sleep timeout if one exists
-   * @private
-   */
-  async #cancelSleepTimeout(): Promise<void> {
-    if (this.#sleepTimeoutTaskId) {
-      try {
-        await this.unschedule(this.#sleepTimeoutTaskId);
-      } catch (e) {
-        // Ignore errors (task may have already completed)
-      }
-
-      this.#sleepTimeoutTaskId = null;
-    }
   }
 
   /**
@@ -1233,9 +1254,10 @@ export class Container<Env = unknown> extends DurableObject {
 
   /**
    * Renew the container's activity timeout
+   *
    * Call this method whenever there is activity on the container
    */
-  private renewActivityTimeout() {
+  public renewActivityTimeout() {
     const timeoutInMs = this.#parseTimeExpression(this.sleepAfter) * 1000;
     this.#sleepAfterMs = Date.now() + timeoutInMs;
   }
