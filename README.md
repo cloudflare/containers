@@ -98,9 +98,9 @@ constructor(ctx: any, env: Env, options?: {
   - `containerFetch(request, port?)`: Traditional signature with Request object
   - `containerFetch(url, init?, port?)`: Standard fetch-like signature with URL string/object and RequestInit options
   Either port parameter or defaultPort must be specified. Automatically detects WebSocket upgrade requests.
-- `startContainer()`: Starts the container if it's not running and sets up monitoring, without waiting for any ports to be ready.
-- `startAndWaitForPorts(ports?, maxTries?)`: Starts the container using startContainer and then waits for specified ports to be ready. If no ports are specified, uses `requiredPorts` or `defaultPort`. If no ports can be determined, just starts the container without port checks.
-- `stopContainer(reason?)`: Stops the container
+- `start()`: Starts the container if it's not running and sets up monitoring, without waiting for any ports to be ready.
+- `startAndWaitForPorts(ports?, maxTries?)`: Starts the container using `start()` and then waits for specified ports to be ready. If no ports are specified, uses `requiredPorts` or `defaultPort`. If no ports can be determined, just starts the container without port checks.
+- `stop(reason?)`: Stops the container
 - `renewActivityTimeout()`: Manually renews the container activity timeout (extends container lifetime)
 - `stopDueToInactivity()`: Called automatically when the container times out due to inactivity
 
@@ -243,7 +243,7 @@ export class ManualStartContainer extends Container {
         // Handle different startup paths
         if (url.pathname === '/start') {
           // Just start the container without waiting for any ports
-          await this.startContainer();
+          await this.start();
           return new Response('Container started but ports not yet verified!');
         }
         else if (url.pathname === '/start-api') {

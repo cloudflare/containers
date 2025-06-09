@@ -196,12 +196,12 @@ describe('Container', () => {
     }).rejects.toThrow("No port specified for container fetch");
   });
 
-  test('stopContainer should destroy container if running', async () => {
+  test('stop should destroy container if running', async () => {
     // Make mockCtx.container.running true for this test
     mockCtx.container.running = true;
 
     // @ts-ignore - ignore TypeScript errors for testing
-    await container.stopContainer('Test stop');
+    await container.stop('Test stop');
 
     expect(mockCtx.container.destroy).toHaveBeenCalledWith('Test stop');
   });

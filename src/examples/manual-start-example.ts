@@ -46,7 +46,7 @@ export class ManualStartContainer extends Container {
     if (!this.ctx.container?.running) {
       try {
         // First, start the container
-        await this.startContainer();
+        await this.start();
 
         if (url.pathname === '/start') {
           // Just start the container without waiting for port

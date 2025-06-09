@@ -327,7 +327,7 @@ export class Container<Env = unknown> extends DurableObject {
    * // Basic usage in a custom Container implementation
    * async customInitialize() {
    *   // Start the container without waiting for a port
-   *   await this.startContainer();
+   *   await this.start();
    *
    *   // Perform additional initialization steps
    *   // that don't require port access
@@ -335,7 +335,7 @@ export class Container<Env = unknown> extends DurableObject {
    *
    * @example
    * // Start with custom configuration
-   * await this.startContainer({
+   * await this.start({
    *   envVars: { DEBUG: 'true', NODE_ENV: 'development' },
    *   entrypoint: ['npm', 'run', 'dev'],
    *   enableInternet: false
@@ -345,7 +345,7 @@ export class Container<Env = unknown> extends DurableObject {
    * @returns A promise that resolves when the container start command has been issued
    * @throws Error if no container context is available or if all start attempts fail
    */
-  async startContainer(
+  async start(
     options?: ContainerStartConfigOptions,
     waitOptions?: { signal?: AbortSignal }
   ): Promise<void> {
@@ -589,8 +589,8 @@ export class Container<Env = unknown> extends DurableObject {
    * Start the container and wait for ports to be available
    * Based on containers-starter-go implementation
    *
-   * This method builds on startContainer by adding port availability verification:
-   * 1. Calls startContainer to ensure the container is running
+   * This method builds on start() by adding port availability verification:
+   * 1. Calls start() to ensure the container is running
    * 2. If no ports are specified and requiredPorts is not set, it uses defaultPort (if set)
    * 3. If no ports can be determined, it calls onStart and renewActivityTimeout immediately
    * 4. For each specified port, it polls until the port is available or maxTries is reached
@@ -842,14 +842,14 @@ export class Container<Env = unknown> extends DurableObject {
   /**
    * Shuts down the container.
    */
-  async stopContainer(signal = 15): Promise<void> {
+  async stop(signal = 15): Promise<void> {
     this.container.signal(signal);
   }
 
   /**
    * Destroys the container. It will trigger onError instead of onStop.
    */
-  async destroyContainer(): Promise<void> {
+  async destroy(): Promise<void> {
     await this.container.destroy();
   }
 
@@ -1279,7 +1279,7 @@ export class Container<Env = unknown> extends DurableObject {
     }
 
     // Stop the container if it's still running
-    await this.stopContainer();
+    await this.stop();
   }
 
   /**
