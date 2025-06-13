@@ -5,7 +5,7 @@ import { Container } from '../lib/container';
  */
 export class MyContainer extends Container {
   // Configure default port for the container - required for automatic proxying
-  defaultPort = 8080;
+  overide defaultPort = 8080;
 
   // Set how long the container should stay active without requests
   sleepAfter = "10m";
@@ -41,7 +41,7 @@ export class MyContainer extends Container {
   // Handle incoming requests
   async fetch(request: Request): Promise<Response> {
     // Default implementation proxies requests to the container
-    return await this.containerFetch(request);
+    return this.containerFetch(request);
   }
 
   // Additional custom methods can be implemented as needed

@@ -6,7 +6,7 @@ import { Container } from '../lib/container';
  */
 export class NoDefaultPortContainer extends Container {
   // No defaultPort defined - we'll handle port specification manually
-  
+
   // Configure normal timeout
   sleepAfter = "10m";
 
@@ -19,13 +19,13 @@ export class NoDefaultPortContainer extends Container {
    */
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    
+
     // Different paths are handled by different services running on different ports
     try {
       if (url.pathname.startsWith('/api')) {
         // API server runs on port 3000
         return await this.containerFetch(request, 3000);
-      } 
+      }
       else if (url.pathname.startsWith('/admin')) {
         // Admin interface runs on port 8080
         return await this.containerFetch(request, 8080);

@@ -27,26 +27,26 @@ export class TimeoutContainer extends Container {
   // Custom method that will renew the activity timeout
   async performBackgroundTask(data: any): Promise<void> {
     console.log('Performing background task with data:', data);
-    
+
     // This will renew the activity timeout
     await this.renewActivityTimeout();
-    
+
     console.log('Background task completed, activity timeout renewed');
   }
 
   // Handle incoming HTTP requests
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    
+
     // Example endpoint to trigger background task
     if (url.pathname === '/task') {
-      const taskData = { 
+      const taskData = {
         id: Date.now().toString(),
-        type: 'manual' 
+        type: 'manual'
       };
-      
+
       await this.performBackgroundTask(taskData);
-      
+
       return new Response(JSON.stringify({
         success: true,
         message: 'Background task executed',
@@ -55,7 +55,7 @@ export class TimeoutContainer extends Container {
         headers: { 'Content-Type': 'application/json' }
       });
     }
-    
+
     // Endpoint to view timeout status
     if (url.pathname === '/timeout-status') {
       return new Response(JSON.stringify({
@@ -64,7 +64,7 @@ export class TimeoutContainer extends Container {
         headers: { 'Content-Type': 'application/json' }
       });
     }
-    
+
     // For all other requests, proxy to the container
     // This will automatically renew the activity timeout
     return await this.containerFetch(request);

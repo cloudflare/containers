@@ -1,5 +1,5 @@
 import { Container } from '../lib/container';
-import { loadBalance } from '../lib/utils';
+import { loadBalance, getContainer } from '../lib/utils';
 
 /**
  * Example container for load balancing
@@ -25,16 +25,15 @@ export default {
     try {
       // Example: Load balance across 5 container instances
       if (url.pathname === '/api') {
-        const container = await loadBalance(env.MY_CONTAINER, 5);
-        return await container.fetch(request);
+        const containerInstance = await loadBalance(env.MY_CONTAINER, 5);
+        return await containerInstance.fetch(request);
       }
 
       // Example: Direct request to a specific container
       if (url.pathname.startsWith('/specific/')) {
         const id = url.pathname.split('/')[2] || 'default';
-        const objectId = env.MY_CONTAINER.idFromName(id);
-        const container = env.MY_CONTAINER.get(objectId);
-        return await container.fetch(request);
+        const containerInstance = getContainer(env.MY_CONTAINER, id);
+        return await containerInstance.fetch(request);
       }
 
       return new Response('Not found', { status: 404 });

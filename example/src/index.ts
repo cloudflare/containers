@@ -31,27 +31,23 @@ export default {
     // pass a unique container identifier to .get()
 
     if (pathname.startsWith('/container')) {
-      const id = env.MY_CONTAINER.idFromName(pathname);
-      const container = env.MY_CONTAINER.get(id);
-      return await container.fetch(request);
+      const containerInstance = getContainer(env.MY_CONTAINER, pathname)
+      return containerInstance.fetch(request);
     }
 
     if (pathname.startsWith('/error')) {
-      const id = env.MY_CONTAINER.idFromName('error-test');
-      const container = env.MY_CONTAINER.get(id);
-      return await container.fetch(request);
+      const containerInstance = getContainer(env.MY_CONTAINER, 'error-test')
+      return containerInstance.fetch(request);
     }
 
     if (pathname.startsWith('/lb')) {
-      const container = await loadBalance(env.MY_CONTAINER, 3);
-      return await container.fetch(request);
+      const containerInstance = await loadBalance(env.MY_CONTAINER, 3);
+      return containerInstance.fetch(request);
     }
 
     if (pathname.startsWith('/singleton')) {
-      // gets the default instance
-      // useful for singleton containers, and eventually will
-      // be used when autoscaling is implemented
-      return await getContainer(env.MY_CONTAINER).fetch(request);
+      // getContainer will return a specific instance if no second argument is provided
+      return getContainer(env.MY_CONTAINER).fetch(request);
     }
 
     return new Response(

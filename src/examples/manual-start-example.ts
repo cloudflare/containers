@@ -16,7 +16,7 @@ export class ManualStartContainer extends Container {
       explicitContainerStart: true // Using the old option for backwards compatibility
     });
   }
-  
+
   // Using the new property for clarity
   manualStart = true;
 
@@ -55,7 +55,7 @@ export class ManualStartContainer extends Container {
             headers: { 'Content-Type': 'text/plain' }
           });
         }
-        
+
         // For other paths, wait for the port to be ready
         await this.startAndWaitForPorts(this.defaultPort);
       } catch (error) {

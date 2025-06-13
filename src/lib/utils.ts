@@ -23,8 +23,9 @@ export async function loadBalance<T extends Container>(
 
 export const singletonContainerId = 'cf-singleton-container';
 export function getContainer<T extends Container>(
-  binding: DurableObjectNamespace<T>
+  binding: DurableObjectNamespace<T>,
+  name?: string
 ): DurableObjectStub<T> {
-  const objectId = binding.idFromName(singletonContainerId);
+  const objectId = binding.idFromName(name ?? singletonContainerId);
   return binding.get(objectId);
 }
