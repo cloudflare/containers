@@ -26,9 +26,7 @@
   ],
   "author": "",
   "license": "ISC",
-  "dependencies": {
-    "partyserver": "^0.0.68"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@types/jest": "^29.5.14",
     "@types/node": "^22.15.3",
