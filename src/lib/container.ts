@@ -1,10 +1,10 @@
-import { nanoid } from 'nanoid';
 import type {
   ContainerOptions,
   ContainerStartOptions,
   ContainerStartConfigOptions,
   Schedule,
 } from '../types';
+import { generateId } from './helpers';
 import { DurableObject } from 'cloudflare:workers';
 
 /**
@@ -941,7 +941,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     callback: string,
     payload?: T
   ): Promise<Schedule<T>> {
-    const id = nanoid(9);
+    const id = generateId(9);
 
     // Ensure the callback is a string (method name)
     if (typeof callback !== 'string') {

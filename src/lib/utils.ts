@@ -2,9 +2,9 @@ import type { Container } from './container';
 
 /**
  * Load balance requests across multiple container instances
- * @param binding The Container binding
+ * @param binding The Container's Durable Object binding
  * @param instances Number of instances to load balance across
- * @returns A container stub ready to handle requests
+ * @returns A promise resolving to a container stub ready to handle requests
  */
 export async function loadBalance<T extends Container>(
   binding: DurableObjectNamespace<T>,
@@ -21,6 +21,12 @@ export async function loadBalance<T extends Container>(
   return binding.get(objectId);
 }
 
+/**
+ * Get a container stub
+ * @param binding The Container's Durable Object binding
+ * @param name The name of the instance to get, uses 'cf-singleton-container' by default
+ * @returns A container stub ready to handle requests
+ */
 export const singletonContainerId = 'cf-singleton-container';
 export function getContainer<T extends Container>(
   binding: DurableObjectNamespace<T>

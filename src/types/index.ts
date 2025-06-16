@@ -2,7 +2,6 @@
  * Basic types for the container implementation
  */
 import { type DurableObject } from 'cloudflare:workers';
-import type { Party, Connection } from 'partyserver';
 
 /**
  * ContainerStartOptions as they come from worker types
@@ -50,15 +49,6 @@ export interface ContainerOptions {
   manualStart?: boolean;
 }
 
-/**
- * Context provided to container methods
- */
-export interface ContainerContext {
-  id: string;
-  party: Party;
-  request?: Request;
-  connection?: Connection;
-}
 
 /**
  * Function to handle container events
