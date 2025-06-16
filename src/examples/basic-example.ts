@@ -41,7 +41,7 @@ export class MyContainer extends Container {
   // Handle incoming requests
   async fetch(request: Request): Promise<Response> {
     // Default implementation proxies requests to the container
-    return await this.containerFetch(request);
+    return this.containerFetch(request);
   }
 
   // Additional custom methods can be implemented as needed

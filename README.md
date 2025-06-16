@@ -392,7 +392,7 @@ export class TimeoutContainer extends Container {
 
     // For all other requests, forward to the container
     // This will automatically renew the activity timeout
-    return await this.containerFetch(request);
+    return this.containerFetch(request);
   }
 }
 ```
@@ -404,7 +404,7 @@ In the future, this will be automatically handled  with smart by Cloudflare Cont
 with autoscaling set to true, but is not yet implemented.
 
 ```typescript
-import { Container, loadBalance } from '@cloudflare/containers';
+import { Container, getContainer, loadBalance } from '@cloudflare/containers';
 
 export class MyContainer extends Container {
   defaultPort = 8080;
@@ -416,19 +416,28 @@ export default {
 
     // Example: Load balance across 5 container instances
     if (url.pathname === '/api') {
-      const container = await loadBalance(env.MY_CONTAINER, 5);
-      return await container.fetch(request);
+      const containerInstance = await loadBalance(env.MY_CONTAINER, 5);
+      return containerInstance.fetch(request);
     }
 
     // Example: Direct request to a specific container
     if (url.pathname.startsWith('/specific/')) {
       const id = url.pathname.split('/')[2] || 'default';
-      const objectId = env.MY_CONTAINER.idFromName(id);
-      const container = env.MY_CONTAINER.get(objectId);
-      return await container.fetch(request);
+      const containerInstance = getContainer(env.MY_CONTAINER, id);
+      return containerInstance.fetch(request);
     }
 
     return new Response('Not found', { status: 404 });
   }
 };
 ```
+
+### Using getContainer
+
+This package includes a `getContainer` helper which returns a container instance
+stub.
+
+The first arbument is the Container's Durable Object namespace. The second argument is
+optional and is a "name" for the Durable Object. This will be used to generate an ID,
+then return a specific Container instance (Durable Object instance). If no second argument
+is given, the name "cf-singleton-container" is used.

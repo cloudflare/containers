@@ -43,14 +43,14 @@ export class WebSocketProxyContainer extends Container {
    */
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    
+
     // Check if this is a WebSocket upgrade request
     if (request.headers.get('Upgrade')?.toLowerCase() === 'websocket') {
       // Proxy WebSocket to the container
       // This automatically renews the activity timeout on each message
       return this.containerFetch(request, this.defaultPort);
     }
-    
+
     // Handle special endpoint to check stats
     if (url.pathname === '/stats') {
       return new Response(JSON.stringify({
@@ -61,7 +61,7 @@ export class WebSocketProxyContainer extends Container {
         headers: { 'Content-Type': 'application/json' }
       });
     }
-    
+
     // For regular HTTP requests, use standard proxying
     return await this.containerFetch(request, this.defaultPort);
   }
