@@ -5,7 +5,7 @@ import { Container } from '../lib/container';
  */
 export class MyContainer extends Container {
   // Configure default port for the container - required for automatic proxying
-  overide defaultPort = 8080;
+  defaultPort = 8080;
 
   // Set how long the container should stay active without requests
   sleepAfter = "10m";
