@@ -1159,8 +1159,11 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     // the maximum amount for alarm retries is 6.
     //
     if (alarmProps.isRetry && alarmProps.retryCount > maxRetries) {
-      // just schedule next alarm so we have infinite retries
-      await this.#scheduleNextAlarm();
+      // Only reschedule if there are pending tasks or container is running
+      const hasScheduledTasks = this.sql`SELECT COUNT(*) as count FROM container_schedules`[0]?.count > 0;
+      if (hasScheduledTasks || this.container.running) {
+        await this.#scheduleNextAlarm();
+      }
       return;
     }
 
@@ -1218,8 +1221,11 @@ export class Container<Env = unknown> extends DurableObject<Env> {
         return;
       }
 
-      // Schedule the next alarm right away
-      await this.#scheduleNextAlarm();
+      // Only schedule next alarm if there are pending schedules or container is running
+      const hasScheduledTasks = this.sql`SELECT COUNT(*) as count FROM container_schedules`[0]?.count > 0;
+      if (hasScheduledTasks) {
+        await this.#scheduleNextAlarm();
+      }
 
       if (this.isActivityExpired()) {
         await this.stopDueToInactivity();
