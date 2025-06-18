@@ -41,12 +41,6 @@ export interface ContainerOptions {
 
   /** Whether to enable internet access for the container */
   enableInternet?: boolean;
-
-  /** If true, container won't be started automatically when the durable object starts */
-  explicitContainerStart?: boolean;
-
-  /** If true, container won't be started automatically when the durable object starts (preferred over explicitContainerStart) */
-  manualStart?: boolean;
 }
 
 
@@ -71,6 +65,7 @@ export interface WaitOptions {
   abort?: AbortSignal;
   retries: number;
   waitInterval: number;
+  portToCheck: number;
 }
 
 /**
