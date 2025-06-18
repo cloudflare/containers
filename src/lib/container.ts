@@ -1037,8 +1037,8 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   override async alarm(alarmProps: { isRetry: boolean; retryCount: number }): Promise<void> {
     if (alarmProps.isRetry && alarmProps.retryCount > MAX_ALAEM_RETRIES) {
       // Only reschedule if there are pending tasks or container is running
-      const hasScheduledTasks =
-        this.sql`SELECT COUNT(*) as count FROM container_schedules`[0]?.count > 0;
+      const scheduleCount = Number(this.sql`SELECT COUNT(*) as count FROM container_schedules`[0]?.count) || 0;
+      const hasScheduledTasks = scheduleCount > 0;
       if (hasScheduledTasks || this.container.running) {
         await this.scheduleNextAlarm();
       }
@@ -1100,8 +1100,8 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       }
 
       // Only schedule next alarm if there are pending schedules or container is running
-      const hasScheduledTasks =
-        this.sql`SELECT COUNT(*) as count FROM container_schedules`[0]?.count > 0;
+      const scheduleCount = Number(this.sql`SELECT COUNT(*) as count FROM container_schedules`[0]?.count) || 0;
+      const hasScheduledTasks = scheduleCount > 0;
       if (hasScheduledTasks) {
         await this.scheduleNextAlarm();
       }
