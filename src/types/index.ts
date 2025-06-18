@@ -67,6 +67,12 @@ export interface ContainerStartConfigOptions {
   enableInternet?: boolean;
 }
 
+export interface WaitOptions {
+  abort?: AbortSignal;
+  retries: number;
+  waitInterval: number;
+}
+
 /**
  * Represents a scheduled task within a Container
  * @template T Type of the payload data
@@ -92,5 +98,36 @@ export type Schedule<T = string> = {
       time: number;
       /** Number of seconds to delay execution */
       delayInSeconds: number;
+    }
+);
+
+/**
+ * Params sent to `onStop` method when the container stops
+ */
+export type StopParams = {
+  exitCode: number;
+  reason: 'exit' | 'runtime_signal';
+};
+
+export type ScheduleSQL = {
+  id: string;
+  callback: string;
+  payload: string;
+  type: 'scheduled' | 'delayed';
+  time: number;
+  delayInSeconds?: number;
+};
+
+export type State = {
+  lastChange: number;
+} & (
+  | {
+      // 'running' means that the container is trying to start and is transitioning to a healthy status.
+      //           onStop might be triggered if there is an exit code, and it will transition to 'stopped'.
+      status: 'running' | 'stopping' | 'stopped' | 'healthy';
+    }
+  | {
+      status: 'stopped_with_code';
+      exitCode?: number;
     }
 );

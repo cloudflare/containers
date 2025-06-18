@@ -3,36 +3,87 @@ import type {
   ContainerStartOptions,
   ContainerStartConfigOptions,
   Schedule,
+  StopParams,
+  ScheduleSQL,
+  State,
+  WaitOptions,
 } from '../types';
-import { generateId } from './helpers';
+import { generateId, parseTimeExpression } from './helpers';
 import { DurableObject } from 'cloudflare:workers';
 
-/**
- * Params sent to `onStop` method when the container stops
- */
-export type StopParams = {
-  exitCode: number;
-  reason: 'exit' | 'runtime_signal';
-};
+// ====================
+// ====================
+//      CONSTANTS
+// ====================
+// ====================
 
-type ScheduleSQL = {
-  id: string;
-  callback: string;
-  payload: string;
-  type: 'scheduled' | 'delayed';
-  time: number;
-  delayInSeconds?: number;
-};
+const NO_CONTAINER_INSTANCE_ERROR =
+  'there is no container instance that can be provided to this durable object';
+const RUNTIME_SIGNALLED_ERROR = 'runtime signalled the container to exit:';
+const UNEXPECTED_EDIT_ERROR = 'container exited with unexpected exit code:';
+const NOT_LISTENING_ERROR = 'the container is not listening';
+const CONTAINER_STATE_KEY = '__CF_CONTAINER_STATE';
 
-export function isNoInstanceError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
+// maxRetries before scheduling next alarm is purposely set to 3,
+// as according to DO docs at https://developers.cloudflare.com/durable-objects/api/alarms/
+// the maximum amount for alarm retries is 6.
+const MAX_ALAEM_RETRIES = 3;
+
+const DEFAULT_SLEEP_AFTER = '10m'; // Default sleep after inactivity time
+const DEFAULT_INSTANCE_POLL_INTERVAL_MS = 500; // Default interval for polling container state
+const DEFAULT_INSTANCE_RETRY_COUNT = Infinity;
+
+const START_TIMEOUT_MS = 25_000;  // Amount of time to wait on a container to start before erroring
+
+// =====================
+// =====================
+//   HELPER FUNCTIONS
+// =====================
+// =====================
+
+// ==== Error helpers ====
+
+function isErrorOfType(error: unknown, matchingString: string): boolean {
+  if (error instanceof String) {
+    error.includes(matchingString);
   }
 
-  return error.message.includes(
-    'there is no container instance that can be provided to this durable object'
-  );
+  if (error instanceof Error) {
+    error.message.includes(matchingString);
+  }
+
+  return false;
 }
+
+const isNoInstanceError = (error: unknown): boolean =>
+  isErrorOfType(error, NO_CONTAINER_INSTANCE_ERROR);
+const isRuntimeSignalledError = (error: unknown): boolean =>
+  isErrorOfType(error, RUNTIME_SIGNALLED_ERROR);
+const isNotListeningError = (error: unknown): boolean => isErrorOfType(error, NOT_LISTENING_ERROR);
+const isContainerExitNonZeroError = (error: unknown): boolean =>
+  isErrorOfType(error, UNEXPECTED_EDIT_ERROR);
+
+function getExitCodeFromError(error: unknown): number | null {
+  if (!(error instanceof Error)) {
+    return null;
+  }
+
+  if (isRuntimeSignalledError(error)) {
+    return +error.message.slice(
+      error.message.indexOf(RUNTIME_SIGNALLED_ERROR) + RUNTIME_SIGNALLED_ERROR.length + 1
+    );
+  }
+
+  if (isContainerExitNonZeroError(error)) {
+    return +error.message.slice(
+      error.message.indexOf(UNEXPECTED_EDIT_ERROR) + UNEXPECTED_EDIT_ERROR.length + 1
+    );
+  }
+
+  return null;
+}
+
+// ==== Stream helpers ====
 
 function attachOnClosedHook(stream: ReadableStream, onClosed: () => void): ReadableStream {
   let destructor: (() => void) | null = () => {
@@ -60,69 +111,9 @@ function attachOnClosedHook(stream: ReadableStream, onClosed: () => void): Reada
   return stream.pipeThrough(transformStream);
 }
 
-export function isRuntimeSignalledError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-
-  return error.message.includes(runtimeSignalledError);
-}
-
-export function isNotListeningError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-
-  return error.message.includes(notListeningError);
-}
-
-export function isContainerExitNonZeroError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-
-  return error.message.includes(containerExitWithError);
-}
-
-const runtimeSignalledError = 'runtime signalled the container to exit:';
-const containerExitWithError = 'container exited with unexpected exit code:';
-const notListeningError = 'the container is not listening';
-
-function getExitCodeFromError(error: unknown): number | null {
-  if (!(error instanceof Error)) {
-    return null;
-  }
-
-  if (isRuntimeSignalledError(error)) {
-    return +error.message.slice(
-      error.message.indexOf(runtimeSignalledError) + runtimeSignalledError.length + 1
-    );
-  }
-
-  if (isContainerExitNonZeroError(error)) {
-    return +error.message.slice(
-      error.message.indexOf(containerExitWithError) + containerExitWithError.length + 1
-    );
-  }
-
-  return null;
-}
-
-type State = {
-  lastChange: number;
-} & (
-  | {
-      // 'running' means that the container is trying to start and is transitioning to a healthy status.
-      //           onStop might be triggered if there is an exit code, and it will transition to 'stopped'.
-      status: 'running' | 'stopping' | 'stopped' | 'healthy';
-    }
-  | {
-      status: 'stopped_with_code';
-      exitCode?: number;
-    }
-);
-
-export const containerStateKey = '__CF_CONTAINER_STATE';
+// ===============================
+//     CONTAINER STATE WRAPPER
+// ===============================
 
 /**
  * ContainerState is a wrapper around a DO storage to store and get
@@ -133,33 +124,23 @@ export const containerStateKey = '__CF_CONTAINER_STATE';
  * A user hook might be repeated multiple times if they throw errors.
  */
 class ContainerState {
+  status?: State;
   constructor(private storage: DurableObject['ctx']['storage']) {}
 
-  status?: State;
-
   async setRunning() {
-    this.status = { lastChange: Date.now(), status: 'running' };
-    await this.update();
-  }
-
-  private async update() {
-    if (!this.status) throw new Error('status should be init');
-    await this.storage.put<State>(containerStateKey, this.status);
+    await this.setStatusAndupdate('running');
   }
 
   async setHealthy() {
-    this.status = { lastChange: Date.now(), status: 'healthy' };
-    await this.update();
+    await this.setStatusAndupdate('healthy');
   }
 
   async setStopping() {
-    this.status = { status: 'stopping', lastChange: Date.now() };
-    await this.update();
+    await this.setStatusAndupdate('stopping');
   }
 
   async setStopped() {
-    this.status = { status: 'stopped', lastChange: Date.now() };
-    await this.update();
+    await this.setStatusAndupdate('stopped');
   }
 
   async setStoppedWithCode(exitCode: number) {
@@ -169,7 +150,7 @@ class ContainerState {
 
   async getState(): Promise<State> {
     if (!this.status) {
-      const state = await this.storage.get<State>(containerStateKey);
+      const state = await this.storage.get<State>(CONTAINER_STATE_KEY);
       if (!state) {
         this.status = {
           status: 'stopped',
@@ -183,57 +164,53 @@ class ContainerState {
 
     return this.status!;
   }
+
+  private async setStatusAndupdate(status: State['status']) {
+    this.status = { status: status, lastChange: Date.now() };
+    await this.update();
+  }
+
+  private async update() {
+    if (!this.status) throw new Error('status should be init');
+    await this.storage.put<State>(CONTAINER_STATE_KEY, this.status);
+  }
 }
 
-/**
- * Main Container class
- */
+// ===============================
+// ===============================
+//     MAIN CONTAINER CLASS
+// ===============================
+// ===============================
+
 export class Container<Env = unknown> extends DurableObject<Env> {
+  // =========================
+  //     Public Attributes
+  // =========================
+
   // Default port for the container (undefined means no default port)
   defaultPort?: number;
 
+  // Required ports that should be checked for availability during container startup
+  // Override this in your subclass to specify ports that must be ready
+  requiredPorts?: number[];
+
   // Timeout after which the container will sleep if no activity
-  //
   // The signal sent to the container by default is a SIGTERM.
   // The container won't get a SIGKILL if this threshold is triggered.
-  sleepAfter: string | number = '5m';
-
-  #sleepAfterMs = 0;
+  sleepAfter: string | number = DEFAULT_SLEEP_AFTER;
 
   // Whether to require manual container start (if true, it won't start automatically)
   manualStart = false;
 
-  /**
-   * Container configuration properties
-   * Set these properties directly in your container instance
-   */
+  // Container configuration properties
+  // Set these properties directly in your container instance
   envVars: ContainerStartOptions['env'] = {};
   entrypoint: ContainerStartOptions['entrypoint'];
   enableInternet: ContainerStartOptions['enableInternet'] = true;
 
-  /**
-   * Execute SQL queries against the Container's database
-   */
-  private sql<T = Record<string, string | number | boolean | null>>(
-    strings: TemplateStringsArray,
-    ...values: (string | number | boolean | null)[]
-  ) {
-    let query = '';
-    try {
-      // Construct the SQL query with placeholders
-      query = strings.reduce((acc, str, i) => acc + str + (i < values.length ? '?' : ''), '');
-
-      // Execute the SQL query with the provided values
-      return [...this.ctx.storage.sql.exec(query, ...values)] as T[];
-    } catch (e) {
-      console.error(`Failed to execute SQL query: ${query}`, e);
-      throw this.onError(e);
-    }
-  }
-
-  private container: NonNullable<DurableObject['ctx']['container']>;
-
-  private state: ContainerState;
+  // =========================
+  //     PUBLIC INTERFACE
+  // =========================
 
   constructor(ctx: DurableObject['ctx'], env: Env, options?: ContainerOptions) {
     super(ctx, env);
@@ -244,7 +221,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       this.renewActivityTimeout();
 
       // First thing, schedule the next alarms
-      await this.#scheduleNextAlarm();
+      await this.scheduleNextAlarm();
     });
 
     if (ctx.container === undefined) {
@@ -279,7 +256,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     // Start the container automatically if needed
     this.ctx.blockConcurrencyWhile(async () => {
       if (this.shouldAutoStart()) {
-        const timeout = AbortSignal.timeout(25_000);
+        const timeout = AbortSignal.timeout(START_TIMEOUT_MS);
 
         // Start container and wait for any required ports
         await this.startAndWaitForPorts([], {
@@ -294,14 +271,9 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     });
   }
 
-  /**
-   * Determine if container should auto-start
-   */
-  shouldAutoStart(): boolean {
-    return !this.manualStart; // Auto-start unless manual start is enabled
-  }
-
-  private monitor: Promise<unknown> | undefined;
+  // ==========================
+  //     CONTAINER STARTING
+  // ==========================
 
   /**
    * Start the container if it's not running and set up monitoring
@@ -345,244 +317,20 @@ export class Container<Env = unknown> extends DurableObject<Env> {
    * @returns A promise that resolves when the container start command has been issued
    * @throws Error if no container context is available or if all start attempts fail
    */
-  async start(
+  public async start(
     options?: ContainerStartConfigOptions,
     waitOptions?: { signal?: AbortSignal }
   ): Promise<void> {
-    await this.#startContainerIfNotRunning(
+    await this.startContainerIfNotRunning(
       {
         abort: waitOptions?.signal,
-        waitInterval: 300,
-        retries: Infinity,
+        waitInterval: DEFAULT_INSTANCE_POLL_INTERVAL_MS,
+        retries: DEFAULT_INSTANCE_RETRY_COUNT,
       },
       options
     );
 
     this.setupMonitor();
-  }
-
-  async #startContainerIfNotRunning(
-    waitOptions: {
-      abort?: AbortSignal;
-      retries: number;
-      waitInterval: number;
-    },
-    options?: ContainerStartConfigOptions
-  ): Promise<void> {
-    // Start the container if it's not running
-    if (this.container.running) {
-      if (!this.monitor) {
-        this.monitor = this.container.monitor();
-      }
-
-      return;
-    }
-
-    const abortedSignal = new Promise(res => {
-      waitOptions.abort?.addEventListener('abort', () => {
-        res(true);
-      });
-    });
-
-    await this.state.setRunning();
-    for (let tries = 0; tries < waitOptions.retries; tries++) {
-      // Use provided options or fall back to instance properties
-      const envVars = options?.envVars ?? this.envVars;
-      const entrypoint = options?.entrypoint ?? this.entrypoint;
-      const enableInternet = options?.enableInternet ?? this.enableInternet;
-
-      // Only include properties that are defined
-      const startConfig: ContainerStartOptions = {
-        enableInternet,
-      };
-
-      if (envVars && Object.keys(envVars).length > 0) startConfig.env = envVars;
-      if (entrypoint) startConfig.entrypoint = entrypoint;
-
-      this.renewActivityTimeout();
-      const handleError = async () => {
-        const err = await this.monitor?.catch(err => err as Error);
-
-        if (typeof err === 'number') {
-          const toThrow = new Error(
-            `Error starting container, early exit code 0 before we could check for healthiness, did it crash early?`
-          );
-
-          try {
-            await this.onError(toThrow);
-          } catch {}
-          throw toThrow;
-        } else if (!isNoInstanceError(err)) {
-          try {
-            await this.onError(err);
-          } catch {}
-
-          throw err;
-        }
-      };
-
-      if (!this.container.running) {
-        if (tries > 0) {
-          await handleError();
-        }
-
-        this.container.start(startConfig);
-        this.monitor = this.container.monitor();
-      }
-
-      this.renewActivityTimeout();
-      await this.#scheduleNextAlarm();
-      const port = this.container.getTcpPort(33);
-      try {
-        await port.fetch('http://containerstarthealthcheck', { signal: waitOptions.abort });
-        return;
-      } catch (error) {
-        if (isNotListeningError(error) && this.container.running) {
-          return;
-        }
-
-        if (!this.container.running && isNotListeningError(error)) {
-          try {
-            await this.onError(new Error(`container crashed when checking if it was ready`));
-          } catch {}
-
-          throw error;
-        }
-
-        console.warn(
-          'Error checking if container is ready:',
-          error instanceof Error ? error.message : String(error)
-        );
-
-        await Promise.any([
-          new Promise(res => setTimeout(res, waitOptions.waitInterval)),
-          abortedSignal,
-        ]);
-
-        if (waitOptions.abort?.aborted) {
-          throw new Error(
-            'Aborted waiting for container to start as we received a cancellation signal'
-          );
-        }
-
-        continue;
-      }
-    }
-  }
-
-  /**
-   * Required ports that should be checked for availability during container startup
-   * Override this in your subclass to specify ports that must be ready
-   */
-  requiredPorts?: number[];
-
-  // synchronises container state with the container source of truth to process events
-  async #syncPendingStoppedEvents() {
-    const state = await this.state.getState();
-    if (!this.container.running && state.status === 'healthy') {
-      await new Promise(res =>
-        // setTimeout to process monitor() just in case
-        setTimeout(async () => {
-          await this.ctx.blockConcurrencyWhile(async () => {
-            const newState = await this.state.getState();
-            if (newState.status !== state.status) {
-              // we got it, sync'd
-              return;
-            }
-
-            // we lost the exit code! :(
-            await this.onStop({ exitCode: 0, reason: 'exit' });
-            await this.state.setStopped();
-          });
-
-          res(true);
-        })
-      );
-
-      return;
-    }
-
-    if (!this.container.running && state.status === 'stopped_with_code') {
-      await new Promise(res =>
-        // setTimeout to process monitor() just in case
-        setTimeout(async () => {
-          await this.ctx.blockConcurrencyWhile(async () => {
-            const newState = await this.state.getState();
-            if (newState.status !== state.status) {
-              // we got it, sync'd
-              return;
-            }
-
-            await this.onStop({ exitCode: state.exitCode ?? 0, reason: 'exit' });
-            await this.state.setStopped();
-            res(true);
-          });
-        })
-      );
-      return;
-    }
-  }
-
-  monitorSetup = false;
-
-  private setupMonitor() {
-    if (this.monitorSetup) {
-      return;
-    }
-
-    this.monitorSetup = true;
-    this.monitor
-      ?.then(async () => {
-        const state = await this.state.getState();
-        await this.ctx.blockConcurrencyWhile(async () => {
-          const newState = await this.state.getState();
-          // already informed
-          if (newState.status !== state.status) {
-            return;
-          }
-
-          await this.state.setStoppedWithCode(0);
-          await this.onStop({ exitCode: 0, reason: 'exit' });
-          await this.state.setStopped();
-        });
-      })
-      .catch(async (error: unknown) => {
-        if (isNoInstanceError(error)) {
-          // we will inform later
-          return;
-        }
-
-        const exitCode = getExitCodeFromError(error);
-        if (exitCode !== null) {
-          const state = await this.state.getState();
-          this.ctx.blockConcurrencyWhile(async () => {
-            const newState = await this.state.getState();
-            // already informed
-            if (newState.status !== state.status) {
-              return;
-            }
-
-            await this.state.setStoppedWithCode(exitCode);
-            await this.onStop({
-              exitCode,
-              reason: isRuntimeSignalledError(error) ? 'runtime_signal' : 'exit',
-            });
-
-            await this.state.setStopped();
-          });
-
-          return;
-        }
-
-        try {
-          // TODO: Be able to retrigger onError
-          await this.onError(error);
-        } catch {}
-      })
-      .finally(() => {
-        this.monitorSetup = false;
-        this.alarmSleepResolve('monitor finally');
-      });
   }
 
   /**
@@ -605,7 +353,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
    * @param maxTries - Maximum number of attempts to connect to each port before failing
    * @throws Error if port checks fail after maxTries attempts
    */
-  async startAndWaitForPorts(
+  public async startAndWaitForPorts(
     ports?: number | number[],
     cancellationOptions?: { abort?: AbortSignal; retries?: number; waitInterval?: number }
   ): Promise<void> {
@@ -614,13 +362,13 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     cancellationOptions ??= {};
     const options = {
       abort: cancellationOptions.abort,
-      retries: cancellationOptions.retries ?? Infinity,
-      waitInterval: cancellationOptions.waitInterval ?? 500,
+      retries: cancellationOptions.retries ?? DEFAULT_INSTANCE_RETRY_COUNT,
+      waitInterval: cancellationOptions.waitInterval ?? DEFAULT_INSTANCE_POLL_INTERVAL_MS,
     };
 
     if (state.status === 'healthy' && this.container.running) {
       if (this.container.running && !this.monitor) {
-        await this.#startContainerIfNotRunning(options);
+        await this.startContainerIfNotRunning(options);
         this.setupMonitor();
       }
 
@@ -628,7 +376,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     }
 
     // trigger all onStop that we didn't do yet
-    await this.#syncPendingStoppedEvents();
+    await this.syncPendingStoppedEvents();
     const abortedSignal = new Promise(res => {
       options.abort?.addEventListener('abort', () => {
         res(true);
@@ -637,7 +385,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
     await this.ctx.blockConcurrencyWhile(async () => {
       // Start the container if it's not running
-      await this.#startContainerIfNotRunning(options);
+      await this.startContainerIfNotRunning(options);
 
       // Determine which ports to check
       let portsToCheck: number[] = [];
@@ -695,7 +443,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
               throw e;
             }
 
-            // Wait a bit before trying again (300ms like in containers-starter-go)
+            // Wait a bit before trying again
             await Promise.any([
               new Promise(resolve => setTimeout(resolve, options.waitInterval)),
               abortedSignal,
@@ -720,6 +468,138 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     });
   }
 
+  // =======================
+  //     LIFECYCLE HOOKS
+  // =======================
+
+  /**
+   * Shuts down the container.
+   */
+  public async stop(signal = 15): Promise<void> {
+    this.container.signal(signal);
+  }
+
+  /**
+   * Destroys the container. It will trigger onError instead of onStop.
+   */
+  public async destroy(): Promise<void> {
+    await this.container.destroy();
+  }
+
+  /**
+   * Lifecycle method called when container starts successfully
+   * Override this method in subclasses to handle container start events
+   */
+  public onStart(): void | Promise<void> {
+    // Default implementation does nothing
+  }
+
+  /**
+   * Lifecycle method called when container shuts down
+   * Override this method in subclasses to handle Container stopped events
+   */
+  public onStop(_: StopParams): void | Promise<void> {
+    // Default implementation does nothing
+  }
+
+  /**
+   * Error handler for container errors
+   * Override this method in subclasses to handle container errors
+   */
+  public onError(error: unknown): any {
+    console.error('Container error:', error);
+    throw error;
+  }
+
+
+  /**
+   * Renew the container's activity timeout
+   *
+   * Call this method whenever there is activity on the container
+   */
+  public renewActivityTimeout() {
+    const timeoutInMs = parseTimeExpression(this.sleepAfter) * 1000;
+    this.sleepAfterMs = Date.now() + timeoutInMs;
+  }
+
+  // ==================
+  //     SCHEDULING
+  // ==================
+
+  /**
+   * Schedule a task to be executed in the future
+   * @template T Type of the payload data
+   * @param when When to execute the task (Date object or number of seconds delay)
+   * @param callback Name of the method to call
+   * @param payload Data to pass to the callback
+   * @returns Schedule object representing the scheduled task
+   */
+  public async schedule<T = string>(
+    when: Date | number,
+    callback: string,
+    payload?: T
+  ): Promise<Schedule<T>> {
+    const id = generateId(9);
+
+    // Ensure the callback is a string (method name)
+    if (typeof callback !== 'string') {
+      throw new Error('Callback must be a string (method name)');
+    }
+
+    // Ensure the method exists
+    if (typeof this[callback as keyof this] !== 'function') {
+      throw new Error(`this.${callback} is not a function`);
+    }
+
+    // Schedule based on the type of 'when' parameter
+    if (when instanceof Date) {
+      // Schedule for a specific time
+      const timestamp = Math.floor(when.getTime() / 1000);
+
+      this.sql`
+        INSERT OR REPLACE INTO container_schedules (id, callback, payload, type, time)
+        VALUES (${id}, ${callback}, ${JSON.stringify(payload)}, 'scheduled', ${timestamp})
+      `;
+
+      await this.scheduleNextAlarm();
+
+      return {
+        taskId: id,
+        callback: callback,
+        payload: payload as T,
+        time: timestamp,
+        type: 'scheduled',
+      };
+    }
+
+    if (typeof when === 'number') {
+      // Schedule for a delay in seconds
+      const time = Math.floor(Date.now() / 1000 + when);
+
+      this.sql`
+        INSERT OR REPLACE INTO container_schedules (id, callback, payload, type, delayInSeconds, time)
+        VALUES (${id}, ${callback}, ${JSON.stringify(payload)}, 'delayed', ${when}, ${time})
+      `;
+
+      await this.scheduleNextAlarm();
+
+      return {
+        taskId: id,
+        callback: callback,
+        payload: payload as T,
+        delayInSeconds: when,
+        time,
+        type: 'delayed',
+      };
+    }
+
+    throw new Error("Invalid schedule type. 'when' must be a Date or number of seconds");
+  }
+
+  // ============
+  //     HTTP
+  // ============
+
   /**
    * Send a request to the container (HTTP or WebSocket) using standard fetch API signature
    * Based on containers-starter-go implementation
@@ -737,7 +617,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
    * @param portParam Optional port number when using URL+init signature
    * @returns A Response from the container, or WebSocket connection
    */
-  async containerFetch(
+  public async containerFetch(
     requestOrUrl: Request | string | URL,
     portOrInit?: number | RequestInit,
     portParam?: number
@@ -836,52 +716,57 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     }
   }
 
+  /**
+   * Handle fetch requests to the Container
+   * Default implementation forwards all HTTP and WebSocket requests to the container
+   * Override this in your subclass to specify a port or implement custom request handling
+   *
+   * @param request The request to handle
+   */
+  override async fetch(request: Request): Promise<Response> {
+    // Check if default port is set
+    if (this.defaultPort === undefined) {
+      return new Response(
+        'No default port configured for this container. Override the fetch method or set defaultPort in your Container subclass.',
+        { status: 500 }
+      );
+    }
+
+    // Forward all requests (HTTP and WebSocket) to the container
+    return await this.containerFetch(request, this.defaultPort);
+  }
+
+  // ===============================
+  // ===============================
+  //     PRIVATE METHODS & ATTRS
+  // ===============================
+  // ===============================
+
+  // ==========================
+  //     PRIVATE ATTRIBUTES
+  // ==========================
+
+  private container: NonNullable<DurableObject['ctx']['container']>;
+  private state: ContainerState;
+  private monitor: Promise<unknown> | undefined;
+
+  private monitorSetup = false;
   // openStreamCount keeps track of the number of open streams to the container
   private openStreamCount = 0;
 
-  /**
-   * Shuts down the container.
-   */
-  async stop(signal = 15): Promise<void> {
-    this.container.signal(signal);
-  }
+  private sleepAfterMs = 0;
 
-  /**
-   * Destroys the container. It will trigger onError instead of onStop.
-   */
-  async destroy(): Promise<void> {
-    await this.container.destroy();
-  }
+  private alarmSleepPromise: Promise<unknown> | undefined;
+  private alarmSleepResolve = (_: unknown) => {};
 
-  /**
-   * Lifecycle method called when container starts successfully
-   * Override this method in subclasses to handle container start events
-   */
-  onStart(): void | Promise<void> {
-    // Default implementation does nothing
-  }
-
-  /**
-   * Lifecycle method called when container shuts down
-   * Override this method in subclasses to handle Container stopped events
-   */
-  onStop(_: StopParams): void | Promise<void> {
-    // Default implementation does nothing
-  }
-
-  /**
-   * Error handler for container errors
-   * Override this method in subclasses to handle container errors
-   */
-  onError(error: unknown): any {
-    console.error('Container error:', error);
-    throw error;
-  }
+  // ==========================
+  //     GENERAL HELPERS
+  // ==========================
 
   /**
    * Try-catch wrapper for async operations
    */
-  async #tryCatch<T>(fn: () => T | Promise<T>): Promise<T> {
+  private async tryCatch<T>(fn: () => T | Promise<T>): Promise<T> {
     try {
       return await fn();
     } catch (e) {
@@ -890,119 +775,360 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     }
   }
 
-  /**
-   * Parse a time expression into seconds
-   * @private
-   * @param timeExpression Time expression (number or string like "5m", "30s", "1h")
-   * @returns Number of seconds
-   */
-  #parseTimeExpression(timeExpression: string | number): number {
-    if (typeof timeExpression === 'number') {
-      // If it's already a number, assume it's in seconds
-      return timeExpression;
-    }
-
-    if (typeof timeExpression === 'string') {
-      // Parse time expressions like "5m", "30s", "1h"
-      const match = timeExpression.match(/^(\d+)([smh])$/);
-      if (!match) {
-        throw new Error(`invalid time expression ${timeExpression}`);
-      }
-
-      const value = parseInt(match[1]);
-      const unit = match[2];
-
-      // Convert to seconds based on unit
-      switch (unit) {
-        case 's':
-          return value;
-        case 'm':
-          return value * 60;
-        case 'h':
-          return value * 60 * 60;
-        default:
-          throw new Error(`unknown time unit ${unit}`);
-      }
-    }
-
-    throw new Error(`invalid type for a time expression: ${typeof timeExpression}`);
+  private shouldAutoStart(): boolean {
+    return !this.manualStart;
   }
 
   /**
-   * Schedule a task to be executed in the future
-   * @template T Type of the payload data
-   * @param when When to execute the task (Date object or number of seconds delay)
-   * @param callback Name of the method to call
-   * @param payload Data to pass to the callback
-   * @returns Schedule object representing the scheduled task
+   * Execute SQL queries against the Container's database
    */
-  async schedule<T = string>(
-    when: Date | number,
-    callback: string,
-    payload?: T
-  ): Promise<Schedule<T>> {
-    const id = generateId(9);
+  private sql<T = Record<string, string | number | boolean | null>>(
+    strings: TemplateStringsArray,
+    ...values: (string | number | boolean | null)[]
+  ) {
+    let query = '';
+    try {
+      // Construct the SQL query with placeholders
+      query = strings.reduce((acc, str, i) => acc + str + (i < values.length ? '?' : ''), '');
 
-    // Ensure the callback is a string (method name)
-    if (typeof callback !== 'string') {
-      throw new Error('Callback must be a string (method name)');
+      // Execute the SQL query with the provided values
+      return [...this.ctx.storage.sql.exec(query, ...values)] as T[];
+    } catch (e) {
+      console.error(`Failed to execute SQL query: ${query}`, e);
+      throw this.onError(e);
+    }
+  }
+
+  // ===========================================
+  //     CONTAINER INTERACTION & MONITORING
+  // ===========================================
+
+  private async startContainerIfNotRunning(
+    waitOptions: WaitOptions,
+    options?: ContainerStartConfigOptions
+  ): Promise<void> {
+    // Start the container if it's not running
+    if (this.container.running) {
+      if (!this.monitor) {
+        this.monitor = this.container.monitor();
+      }
+
+      return;
     }
 
-    // Ensure the method exists
-    if (typeof this[callback as keyof this] !== 'function') {
-      throw new Error(`this.${callback} is not a function`);
+    const abortedSignal = new Promise(res => {
+      waitOptions.abort?.addEventListener('abort', () => {
+        res(true);
+      });
+    });
+
+    await this.state.setRunning();
+    for (let tries = 0; tries < waitOptions.retries; tries++) {
+      // Use provided options or fall back to instance properties
+      const envVars = options?.envVars ?? this.envVars;
+      const entrypoint = options?.entrypoint ?? this.entrypoint;
+      const enableInternet = options?.enableInternet ?? this.enableInternet;
+
+      // Only include properties that are defined
+      const startConfig: ContainerStartOptions = {
+        enableInternet,
+      };
+
+      if (envVars && Object.keys(envVars).length > 0) startConfig.env = envVars;
+      if (entrypoint) startConfig.entrypoint = entrypoint;
+
+      this.renewActivityTimeout();
+      const handleError = async () => {
+        const err = await this.monitor?.catch(err => err as Error);
+
+        if (typeof err === 'number') {
+          const toThrow = new Error(
+            `Error starting container, early exit code 0 before we could check for healthiness, did it crash early?`
+          );
+
+          try {
+            await this.onError(toThrow);
+          } catch {}
+          throw toThrow;
+        } else if (!isNoInstanceError(err)) {
+          try {
+            await this.onError(err);
+          } catch {}
+
+          throw err;
+        }
+      };
+
+      if (!this.container.running) {
+        if (tries > 0) {
+          await handleError();
+        }
+
+        this.container.start(startConfig);
+        this.monitor = this.container.monitor();
+      }
+
+      this.renewActivityTimeout();
+      await this.scheduleNextAlarm();
+      const port = this.container.getTcpPort(33);
+      try {
+        await port.fetch('http://containerstarthealthcheck', { signal: waitOptions.abort });
+        return;
+      } catch (error) {
+        if (isNotListeningError(error) && this.container.running) {
+          return;
+        }
+
+        if (!this.container.running && isNotListeningError(error)) {
+          try {
+            await this.onError(new Error(`container crashed when checking if it was ready`));
+          } catch {}
+
+          throw error;
+        }
+
+        console.warn(
+          'Error checking if container is ready:',
+          error instanceof Error ? error.message : String(error)
+        );
+
+        await Promise.any([
+          new Promise(res => setTimeout(res, waitOptions.waitInterval)),
+          abortedSignal,
+        ]);
+
+        if (waitOptions.abort?.aborted) {
+          throw new Error(
+            'Aborted waiting for container to start as we received a cancellation signal'
+          );
+        }
+
+        continue;
+      }
+    }
+  }
+
+  private setupMonitor() {
+    if (this.monitorSetup) {
+      return;
     }
 
-    // Schedule based on the type of 'when' parameter
-    if (when instanceof Date) {
-      // Schedule for a specific time
-      const timestamp = Math.floor(when.getTime() / 1000);
+    this.monitorSetup = true;
+    this.monitor
+      ?.then(async () => {
+        const state = await this.state.getState();
+        await this.ctx.blockConcurrencyWhile(async () => {
+          const newState = await this.state.getState();
+          // already informed
+          if (newState.status !== state.status) {
+            return;
+          }
 
-      this.sql`
-        INSERT OR REPLACE INTO container_schedules (id, callback, payload, type, time)
-        VALUES (${id}, ${callback}, ${JSON.stringify(payload)}, 'scheduled', ${timestamp})
+          await this.state.setStoppedWithCode(0);
+          await this.onStop({ exitCode: 0, reason: 'exit' });
+          await this.state.setStopped();
+        });
+      })
+      .catch(async (error: unknown) => {
+        if (isNoInstanceError(error)) {
+          // we will inform later
+          return;
+        }
+
+        const exitCode = getExitCodeFromError(error);
+        if (exitCode !== null) {
+          const state = await this.state.getState();
+          this.ctx.blockConcurrencyWhile(async () => {
+            const newState = await this.state.getState();
+            // already informed
+            if (newState.status !== state.status) {
+              return;
+            }
+
+            await this.state.setStoppedWithCode(exitCode);
+            await this.onStop({
+              exitCode,
+              reason: isRuntimeSignalledError(error) ? 'runtime_signal' : 'exit',
+            });
+
+            await this.state.setStopped();
+          });
+
+          return;
+        }
+
+        try {
+          // TODO: Be able to retrigger onError
+          await this.onError(error);
+        } catch {}
+      })
+      .finally(() => {
+        this.monitorSetup = false;
+        this.alarmSleepResolve('monitor finally');
+      });
+  }
+
+  // ============================
+  //     ALARMS AND SCHEDULES
+  // ============================
+
+  /**
+   * Method called when an alarm fires
+   * Executes any scheduled tasks that are due
+   */
+  override async alarm(alarmProps: { isRetry: boolean; retryCount: number }): Promise<void> {
+    if (alarmProps.isRetry && alarmProps.retryCount > MAX_ALAEM_RETRIES) {
+      // Only reschedule if there are pending tasks or container is running
+      const hasScheduledTasks =
+        this.sql`SELECT COUNT(*) as count FROM container_schedules`[0]?.count > 0;
+      if (hasScheduledTasks || this.container.running) {
+        await this.scheduleNextAlarm();
+      }
+      return;
+    }
+
+    await this.tryCatch(async () => {
+      const now = Math.floor(Date.now() / 1000);
+
+      // Get all schedules that should be executed now
+      const result = this.sql<{
+        id: string;
+        callback: string;
+        payload: string;
+        type: 'scheduled' | 'delayed';
+        time: number;
+      }>`
+        SELECT * FROM container_schedules;
       `;
 
-      await this.#scheduleNextAlarm();
+      let maxTime = 0;
 
-      return {
-        taskId: id,
-        callback: callback,
-        payload: payload as T,
-        time: timestamp,
-        type: 'scheduled',
-      };
+      // Process each due schedule
+      for (const row of result) {
+        if (row.time > now) {
+          maxTime = Math.max(maxTime, row.time * 1000);
+          continue;
+        }
+
+        const callback = this[row.callback as keyof this];
+
+        if (!callback || typeof callback !== 'function') {
+          console.error(`Callback ${row.callback} not found or is not a function`);
+          continue;
+        }
+
+        // Create a schedule object for context
+        const schedule = this.getSchedule(row.id);
+
+        try {
+          // Parse the payload and execute the callback
+          const payload = row.payload ? JSON.parse(row.payload) : undefined;
+
+          // Use context storage to execute the callback with proper 'this' binding
+          await callback.call(this, payload, await schedule);
+        } catch (e) {
+          console.error(`Error executing scheduled callback "${row.callback}":`, e);
+        }
+
+        // Delete the schedule after execution (one-time schedules)
+        this.sql`DELETE FROM container_schedules WHERE id = ${row.id}`;
+      }
+
+      await this.syncPendingStoppedEvents();
+
+      // if not running and nothing to do, stop
+      if (!this.container.running) {
+        return;
+      }
+
+      // Only schedule next alarm if there are pending schedules or container is running
+      const hasScheduledTasks =
+        this.sql`SELECT COUNT(*) as count FROM container_schedules`[0]?.count > 0;
+      if (hasScheduledTasks) {
+        await this.scheduleNextAlarm();
+      }
+
+      if (this.isActivityExpired()) {
+        await this.stopDueToInactivity();
+        return;
+      }
+
+      let resolve = (_: unknown) => {};
+      this.alarmSleepPromise = new Promise(res => {
+        this.alarmSleepResolve = val => {
+          // add here any debugging if you need to
+          res(val);
+        };
+
+        resolve = res;
+      });
+
+      // Math.min(3m or maxTime, sleepTimeout)
+      maxTime = maxTime === 0 ? Date.now() + 60 * 3 * 1000 : maxTime;
+      maxTime = Math.min(maxTime, this.sleepAfterMs);
+      const timeout = Math.max(0, maxTime - Date.now());
+      const timeoutRef = setTimeout(() => {
+        resolve('setTimeout');
+      }, timeout);
+
+      await this.alarmSleepPromise;
+      clearTimeout(timeoutRef);
+    });
+  }
+
+
+  // synchronises container state with the container source of truth to process events
+  private async syncPendingStoppedEvents() {
+    const state = await this.state.getState();
+    if (!this.container.running && state.status === 'healthy') {
+      await new Promise(res =>
+        // setTimeout to process monitor() just in case
+        setTimeout(async () => {
+          await this.ctx.blockConcurrencyWhile(async () => {
+            const newState = await this.state.getState();
+            if (newState.status !== state.status) {
+              // we got it, sync'd
+              return;
+            }
+
+            // we lost the exit code! :(
+            await this.onStop({ exitCode: 0, reason: 'exit' });
+            await this.state.setStopped();
+          });
+
+          res(true);
+        })
+      );
+
+      return;
     }
 
-    if (typeof when === 'number') {
-      // Schedule for a delay in seconds
-      const time = Math.floor(Date.now() / 1000 + when);
+    if (!this.container.running && state.status === 'stopped_with_code') {
+      await new Promise(res =>
+        // setTimeout to process monitor() just in case
+        setTimeout(async () => {
+          await this.ctx.blockConcurrencyWhile(async () => {
+            const newState = await this.state.getState();
+            if (newState.status !== state.status) {
+              // we got it, sync'd
+              return;
+            }
 
-      this.sql`
-        INSERT OR REPLACE INTO container_schedules (id, callback, payload, type, delayInSeconds, time)
-        VALUES (${id}, ${callback}, ${JSON.stringify(payload)}, 'delayed', ${when}, ${time})
-      `;
-
-      await this.#scheduleNextAlarm();
-
-      return {
-        taskId: id,
-        callback: callback,
-        payload: payload as T,
-        delayInSeconds: when,
-        time,
-        type: 'delayed',
-      };
+            await this.onStop({ exitCode: state.exitCode ?? 0, reason: 'exit' });
+            await this.state.setStopped();
+            res(true);
+          });
+        })
+      );
+      return;
     }
-
-    throw new Error("Invalid schedule type. 'when' must be a Date or number of seconds");
   }
 
   /**
    * Schedule the next alarm based on upcoming tasks
    * @private
    */
-  async #scheduleNextAlarm(ms = 1000): Promise<void> {
+  private async scheduleNextAlarm(ms = 1000): Promise<void> {
     const existingAlarm = await this.ctx.storage.getAlarm();
     const nextTime = ms + Date.now();
 
@@ -1013,18 +1139,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
       this.alarmSleepResolve('scheduling next alarm');
     }
-  }
-
-  /**
-   * Cancel a scheduled task
-   * @param id ID of the task to cancel
-   */
-  async unschedule(id: string): Promise<void> {
-    // Delete the schedule from the database
-    this.sql`DELETE FROM container_schedules WHERE id = ${id}`;
-
-    // Reschedule the next alarm (if any remain)
-    await this.#scheduleNextAlarm();
   }
 
   /**
@@ -1072,239 +1186,21 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     };
   }
 
-  /**
-   * Get scheduled tasks matching the given criteria
-   * @template T Type of the payload data
-   * @param criteria Criteria to filter schedules
-   * @returns Array of matching Schedule objects
-   */
-  getSchedules<T = string>(
-    criteria: {
-      id?: string;
-      type?: 'scheduled' | 'delayed';
-      timeRange?: { start?: Date; end?: Date };
-    } = {}
-  ): Schedule<T>[] {
-    // Build the query dynamically based on criteria
-    let query = 'SELECT * FROM container_schedules WHERE 1=1';
-    const params: (string | number)[] = [];
-
-    // Add filters for each criterion
-    if (criteria.id) {
-      query += ' AND id = ?';
-      params.push(criteria.id);
-    }
-
-    if (criteria.type) {
-      query += ' AND type = ?';
-      params.push(criteria.type);
-    }
-
-    if (criteria.timeRange) {
-      if (criteria.timeRange.start) {
-        query += ' AND time >= ?';
-        params.push(Math.floor(criteria.timeRange.start.getTime() / 1000));
-      }
-
-      if (criteria.timeRange.end) {
-        query += ' AND time <= ?';
-        params.push(Math.floor(criteria.timeRange.end.getTime() / 1000));
-      }
-    }
-
-    // Execute the query
-    const result = this.ctx.storage.sql.exec(query, ...params);
-
-    // Transform results to Schedule objects
-    return result.toArray().map(row => {
-      let payload: T;
-      try {
-        payload = JSON.parse(row.payload as string) as T;
-      } catch (e) {
-        console.error(`Error parsing payload for schedule ${row.id}:`, e);
-        payload = undefined as unknown as T;
-      }
-
-      if (row.type === 'delayed') {
-        return {
-          taskId: row.id as string,
-          callback: row.callback as string,
-          payload,
-          type: 'delayed',
-          time: row.time as number,
-          delayInSeconds: row.delayInSeconds as number,
-        };
-      }
-
-      return {
-        taskId: row.id as string,
-        callback: row.callback as string,
-        payload,
-        type: 'scheduled',
-        time: row.time as number,
-      };
-    });
-  }
-
-  /**
-   * Method called when an alarm fires
-   * Executes any scheduled tasks that are due
-   */
-  override async alarm(alarmProps: { isRetry: boolean; retryCount: number }): Promise<void> {
-    const maxRetries = 3;
-
-    //
-    // maxRetries before scheduling next alarm is purposely set to 3,
-    // as according to DO docs at https://developers.cloudflare.com/durable-objects/api/alarms/
-    // the maximum amount for alarm retries is 6.
-    //
-    if (alarmProps.isRetry && alarmProps.retryCount > maxRetries) {
-      // Only reschedule if there are pending tasks or container is running
-      const hasScheduledTasks = this.sql`SELECT COUNT(*) as count FROM container_schedules`[0]?.count > 0;
-      if (hasScheduledTasks || this.container.running) {
-        await this.#scheduleNextAlarm();
-      }
-      return;
-    }
-
-    await this.#tryCatch(async () => {
-      const now = Math.floor(Date.now() / 1000);
-
-      // Get all schedules that should be executed now
-      const result = this.sql<{
-        id: string;
-        callback: string;
-        payload: string;
-        type: 'scheduled' | 'delayed';
-        time: number;
-      }>`
-        SELECT * FROM container_schedules;
-      `;
-
-      let maxTime = 0;
-
-      // Process each due schedule
-      for (const row of result) {
-        if (row.time > now) {
-          maxTime = Math.max(maxTime, row.time * 1000);
-          continue;
-        }
-
-        const callback = this[row.callback as keyof this];
-
-        if (!callback || typeof callback !== 'function') {
-          console.error(`Callback ${row.callback} not found or is not a function`);
-          continue;
-        }
-
-        // Create a schedule object for context
-        const schedule = this.getSchedule(row.id);
-
-        try {
-          // Parse the payload and execute the callback
-          const payload = row.payload ? JSON.parse(row.payload) : undefined;
-
-          // Use context storage to execute the callback with proper 'this' binding
-          await callback.call(this, payload, await schedule);
-        } catch (e) {
-          console.error(`Error executing scheduled callback "${row.callback}":`, e);
-        }
-
-        // Delete the schedule after execution (one-time schedules)
-        this.sql`DELETE FROM container_schedules WHERE id = ${row.id}`;
-      }
-
-      await this.#syncPendingStoppedEvents();
-
-      // if not running and nothing to do, stop
-      if (!this.container.running) {
-        return;
-      }
-
-      // Only schedule next alarm if there are pending schedules or container is running
-      const hasScheduledTasks = this.sql`SELECT COUNT(*) as count FROM container_schedules`[0]?.count > 0;
-      if (hasScheduledTasks) {
-        await this.#scheduleNextAlarm();
-      }
-
-      if (this.isActivityExpired()) {
-        await this.stopDueToInactivity();
-        return;
-      }
-
-      let resolve = (_: unknown) => {};
-      this.alarmSleepPromise = new Promise(res => {
-        this.alarmSleepResolve = val => {
-          // add here any debugging if you need to
-          res(val);
-        };
-
-        resolve = res;
-      });
-
-      // Math.min(3m or maxTime, sleepTimeout)
-      maxTime = maxTime === 0 ? Date.now() + 60 * 3 * 1000 : maxTime;
-      maxTime = Math.min(maxTime, this.#sleepAfterMs);
-      const timeout = Math.max(0, maxTime - Date.now());
-      const timeoutRef = setTimeout(() => {
-        resolve('setTimeout');
-      }, timeout);
-
-      await this.alarmSleepPromise;
-      clearTimeout(timeoutRef);
-    });
-  }
-
-  alarmSleepPromise: Promise<unknown> | undefined;
-  alarmSleepResolve = (_: unknown) => {};
-
-  /**
-   * Renew the container's activity timeout
-   *
-   * Call this method whenever there is activity on the container
-   */
-  public renewActivityTimeout() {
-    const timeoutInMs = this.#parseTimeExpression(this.sleepAfter) * 1000;
-    this.#sleepAfterMs = Date.now() + timeoutInMs;
-  }
-
   private isActivityExpired(): boolean {
-    return this.#sleepAfterMs <= Date.now();
+    return this.sleepAfterMs <= Date.now();
   }
 
   /**
    * Method called by scheduled task to stop the container due to inactivity
    */
-  async stopDueToInactivity(): Promise<void> {
-    if (!this.container.running) {
+  private async stopDueToInactivity(): Promise<void> {
+    const alreadyStopped = !this.container.running;
+    const hasOpenStream = this.openStreamCount > 0;
+
+    if (alreadyStopped || hasOpenStream) {
       return;
     }
 
-    if (this.openStreamCount > 0) {
-      return;
-    }
-
-    // Stop the container if it's still running
     await this.stop();
-  }
-
-  /**
-   * Handle fetch requests to the Container
-   * Default implementation forwards all HTTP and WebSocket requests to the container
-   * Override this in your subclass to specify a port or implement custom request handling
-   *
-   * @param request The request to handle
-   */
-  override async fetch(request: Request): Promise<Response> {
-    // Check if default port is set
-    if (this.defaultPort === undefined) {
-      return new Response(
-        'No default port configured for this container. Override the fetch method or set defaultPort in your Container subclass.',
-        { status: 500 }
-      );
-    }
-
-    // Forward all requests (HTTP and WebSocket) to the container
-    return await this.containerFetch(request, this.defaultPort);
   }
 }
