@@ -43,8 +43,9 @@ const TIMEOUT_TO_GET_CONTAINER_SECONDS = 8;
 const TIMEOUT_TO_GET_PORTS = 20;
 
 // Number of tries based on polling interval
-const TRIES_TO_GET_CONTAINER =
-  Math.ceil((TIMEOUT_TO_GET_CONTAINER_SECONDS * 1000) / INSTANCE_POLL_INTERVAL_MS);
+const TRIES_TO_GET_CONTAINER = Math.ceil(
+  (TIMEOUT_TO_GET_CONTAINER_SECONDS * 1000) / INSTANCE_POLL_INTERVAL_MS
+);
 const TRIES_TO_GET_PORTS = Math.ceil((TIMEOUT_TO_GET_PORTS * 1000) / INSTANCE_POLL_INTERVAL_MS);
 
 // If user has specified no ports and we need to check one
@@ -64,7 +65,7 @@ const TEMPORARY_HARDCODED_ATTEMPT_MAX = 6;
 // ==== Error helpers ====
 
 function isErrorOfType(e: unknown, matchingString: string): boolean {
-  const errorString = (e instanceof Error) ? e.message : String(e);
+  const errorString = e instanceof Error ? e.message : String(e);
   return errorString.includes(matchingString);
 }
 
@@ -82,15 +83,23 @@ function getExitCodeFromError(error: unknown): number | null {
   }
 
   if (isRuntimeSignalledError(error)) {
-    return +error.message.slice(
-      error.message.indexOf(RUNTIME_SIGNALLED_ERROR) + RUNTIME_SIGNALLED_ERROR.length + 1
-    );
+    return +error.message
+      .toLowerCase()
+      .slice(
+        error.message.toLowerCase().indexOf(RUNTIME_SIGNALLED_ERROR) +
+          RUNTIME_SIGNALLED_ERROR.length +
+          1
+      );
   }
 
   if (isContainerExitNonZeroError(error)) {
-    return +error.message.slice(
-      error.message.indexOf(UNEXPECTED_EDIT_ERROR) + UNEXPECTED_EDIT_ERROR.length + 1
-    );
+    return +error.message
+      .toLowerCase()
+      .slice(
+        error.message.toLowerCase().indexOf(UNEXPECTED_EDIT_ERROR) +
+          UNEXPECTED_EDIT_ERROR.length +
+          1
+      );
   }
 
   return null;
@@ -313,7 +322,8 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     options?: ContainerStartConfigOptions,
     waitOptions?: { signal?: AbortSignal }
   ): Promise<void> {
-    const portToCheck = this.defaultPort ?? (this.requiredPorts ? this.requiredPorts[0] : FALLBACK_PORT_TO_CHECK);
+    const portToCheck =
+      this.defaultPort ?? (this.requiredPorts ? this.requiredPorts[0] : FALLBACK_PORT_TO_CHECK);
     await this.startContainerIfNotRunning(
       {
         abort: waitOptions?.signal,
@@ -654,7 +664,10 @@ export class Container<Env = unknown> extends DurableObject<Env> {
         await this.startAndWaitForPorts(port, { abort: request.signal });
       } catch (e) {
         if (isNoInstanceError(e)) {
-          return new Response("There is no Container instance available at this time.\nThis is likely because you have reached your max concurrent instance count (set in wrangler config) or are you currently provisioning the Container.\nIf you are deploying your Container for the first time, check your dashboard to see provisioning status, this may take a few minutes.", { status: 503 });
+          return new Response(
+            'There is no Container instance available at this time.\nThis is likely because you have reached your max concurrent instance count (set in wrangler config) or are you currently provisioning the Container.\nIf you are deploying your Container for the first time, check your dashboard to see provisioning status, this may take a few minutes.',
+            { status: 503 }
+          );
         } else {
           return new Response(
             `Failed to start container: ${e instanceof Error ? e.message : String(e)}`,
@@ -761,14 +774,16 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   // This wraps blockConcurrencyWhile so you can throw in it,
   // then check for a string return value that you can throw from the parent
   // Note that the DO will continue to run, unlike normal errors in blockConcurrencyWhile
-  private async blockConcurrencyThrowable(blockingFunction: () => Promise<any>): Promise<string | undefined> {
+  private async blockConcurrencyThrowable(
+    blockingFunction: () => Promise<any>
+  ): Promise<string | undefined> {
     return this.ctx.blockConcurrencyWhile(async () => {
       try {
         return await blockingFunction();
-      } catch(e) {
+      } catch (e) {
         return `${e instanceof Error ? e.message : String(e)}`;
       }
-    })
+    });
   }
 
   /**
@@ -917,7 +932,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       this.renewActivityTimeout();
       await this.scheduleNextAlarm();
 
-
       // TODO: Make this the port I'm trying to get!
       const port = this.container.getTcpPort(waitOptions.portToCheck);
       try {
@@ -1037,7 +1051,8 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   override async alarm(alarmProps: { isRetry: boolean; retryCount: number }): Promise<void> {
     if (alarmProps.isRetry && alarmProps.retryCount > MAX_ALAEM_RETRIES) {
       // Only reschedule if there are pending tasks or container is running
-      const scheduleCount = Number(this.sql`SELECT COUNT(*) as count FROM container_schedules`[0]?.count) || 0;
+      const scheduleCount =
+        Number(this.sql`SELECT COUNT(*) as count FROM container_schedules`[0]?.count) || 0;
       const hasScheduledTasks = scheduleCount > 0;
       if (hasScheduledTasks || this.container.running) {
         await this.scheduleNextAlarm();
@@ -1100,7 +1115,8 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       }
 
       // Only schedule next alarm if there are pending schedules or container is running
-      const scheduleCount = Number(this.sql`SELECT COUNT(*) as count FROM container_schedules`[0]?.count) || 0;
+      const scheduleCount =
+        Number(this.sql`SELECT COUNT(*) as count FROM container_schedules`[0]?.count) || 0;
       const hasScheduledTasks = scheduleCount > 0;
       if (hasScheduledTasks) {
         await this.scheduleNextAlarm();
