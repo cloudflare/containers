@@ -29,9 +29,9 @@ export function isNoInstanceError(error: unknown): boolean {
     return false;
   }
 
-  return error.message.includes(
-    'there is no container instance that can be provided to this durable object'
-  );
+  return error.message
+    .toLowerCase()
+    .includes('there is no container instance that can be provided to this durable object');
 }
 
 function attachOnClosedHook(stream: ReadableStream, onClosed: () => void): ReadableStream {
@@ -65,7 +65,7 @@ export function isRuntimeSignalledError(error: unknown): boolean {
     return false;
   }
 
-  return error.message.includes(runtimeSignalledError);
+  return error.message.toLowerCase().includes(runtimeSignalledError);
 }
 
 export function isNotListeningError(error: unknown): boolean {
@@ -73,7 +73,7 @@ export function isNotListeningError(error: unknown): boolean {
     return false;
   }
 
-  return error.message.includes(notListeningError);
+  return error.message.toLowerCase().includes(notListeningError);
 }
 
 export function isContainerExitNonZeroError(error: unknown): boolean {
@@ -81,7 +81,7 @@ export function isContainerExitNonZeroError(error: unknown): boolean {
     return false;
   }
 
-  return error.message.includes(containerExitWithError);
+  return error.message.toLowerCase().includes(containerExitWithError);
 }
 
 const runtimeSignalledError = 'runtime signalled the container to exit:';
@@ -94,15 +94,23 @@ function getExitCodeFromError(error: unknown): number | null {
   }
 
   if (isRuntimeSignalledError(error)) {
-    return +error.message.slice(
-      error.message.indexOf(runtimeSignalledError) + runtimeSignalledError.length + 1
-    );
+    return +error.message
+      .toLowerCase()
+      .slice(
+        error.message.toLowerCase().indexOf(runtimeSignalledError) +
+          runtimeSignalledError.length +
+          1
+      );
   }
 
   if (isContainerExitNonZeroError(error)) {
-    return +error.message.slice(
-      error.message.indexOf(containerExitWithError) + containerExitWithError.length + 1
-    );
+    return +error.message
+      .toLowerCase()
+      .slice(
+        error.message.toLowerCase().indexOf(containerExitWithError) +
+          containerExitWithError.length +
+          1
+      );
   }
 
   return null;
