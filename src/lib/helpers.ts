@@ -1,5 +1,9 @@
-// generates a random ID of a specified length using a url-friendly alphabet
-// can be run without node:crypto
+/**
+ * Generates a random ID of a specified length using a url-friendly alphabet
+ * Can be run without node:crypto
+ * @param length - The length of the ID to generate (default: 9)
+ * @returns A random string ID
+ */
 export function generateId(length = 9) {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   const bytes = new Uint8Array(length);

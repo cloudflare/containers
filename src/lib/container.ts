@@ -314,6 +314,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
    * });
    *
    * @param options - Optional configuration to override instance defaults
+   * @param waitOptions - Optional wait configuration with abort signal for cancellation
    * @returns A promise that resolves when the container start command has been issued
    * @throws Error if no container context is available or if all start attempts fail
    */
@@ -474,6 +475,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
   /**
    * Shuts down the container.
+   * @param signal - The signal to send to the container (default: 15 for SIGTERM)
    */
   public async stop(signal = 15): Promise<void> {
     this.container.signal(signal);
@@ -497,6 +499,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   /**
    * Lifecycle method called when container shuts down
    * Override this method in subclasses to handle Container stopped events
+   * @param params - Object containing exitCode and reason for the stop
    */
   public onStop(_: StopParams): void | Promise<void> {
     // Default implementation does nothing
@@ -505,6 +508,8 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   /**
    * Error handler for container errors
    * Override this method in subclasses to handle container errors
+   * @param error - The error that occurred
+   * @returns Can return any value or throw the error
    */
   public onError(error: unknown): any {
     console.error('Container error:', error);
