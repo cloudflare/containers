@@ -1,4 +1,5 @@
-import { Container, loadBalance, getContainer } from '@cloudflare/containers';
+// import { Container, loadBalance, getContainer } from '@cloudflare/containers'; // in a real Worker
+import { Container, loadBalance, getContainer } from '../../src/index.js';
 
 export class MyContainer extends Container {
   defaultPort = 8080; // The default port for the container to listen on
