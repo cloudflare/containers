@@ -1,5 +1,5 @@
 import { Container } from '../lib/container';
-import { loadBalance, getContainer } from '../lib/utils';
+import { getRandom, getContainer } from '../lib/utils';
 
 /**
  * Example container for load balancing
@@ -25,7 +25,7 @@ export default {
     try {
       // Example: Load balance across 5 container instances
       if (url.pathname === '/api') {
-        const containerInstance = await loadBalance(env.MY_CONTAINER, 5);
+        const containerInstance = await getRandom(env.MY_CONTAINER, 5);
         return await containerInstance.fetch(request);
       }
 

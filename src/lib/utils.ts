@@ -1,12 +1,12 @@
 import type { Container } from './container';
 
 /**
- * Load balance requests across multiple container instances
+ * Get a random container instances across N instances
  * @param binding The Container's Durable Object binding
  * @param instances Number of instances to load balance across
  * @returns A promise resolving to a container stub ready to handle requests
  */
-export async function loadBalance<T extends Container>(
+export async function getRandom<T extends Container>(
   binding: DurableObjectNamespace<T>,
   instances: number = 3
 ): Promise<DurableObjectStub<T>> {
@@ -19,6 +19,22 @@ export async function loadBalance<T extends Container>(
 
   // Return the stub for the selected instance
   return binding.get(objectId);
+}
+
+/**
+ * Deprecated funtion to get random container instances. Renamed to getRandom
+ * @param binding The Container's Durable Object binding
+ * @param instances Number of instances to load balance across
+ * @returns A promise resolving to a container stub ready to handle requests
+ */
+export async function loadBalance<T extends Container>(
+  binding: DurableObjectNamespace<T>,
+  instances: number = 3
+): Promise<DurableObjectStub<T>> {
+  console.warn(
+    'loadBalance is deprecated, please use getRandom instead. This will be removed in a future version.'
+  )
+  return getRandom(binding, instances);
 }
 
 /**

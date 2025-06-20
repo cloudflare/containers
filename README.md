@@ -19,7 +19,7 @@ npm install @cloudflare/containers
 ## Basic Example
 
 ```typescript
-import { Container, loadBalance } from '@cloudflare/containers';
+import { Container, getRandom } from '@cloudflare/containers';
 
 export class MyContainer extends Container {
   // Configure default port for the container
@@ -41,12 +41,12 @@ export default {
       return await stub.fetch(request);
     }
 
-    // (Note: loadBalance is a temporary method until built-in autoscaling an
+    // (Note: getRandom is a temporary method until built-in autoscaling an
     // load balancing are added)
 
     // If you want to route to one of many containers (in this case 5),
-    // use the loadBalance helper
-    let container = await loadBalance(env.MY_CONTAINER, 5);
+    // use the getRandom helper
+    let container = await getRandom(env.MY_CONTAINER, 5);
     return await container.fetch(request);
   },
 };
@@ -106,7 +106,7 @@ constructor(ctx: any, env: Env, options?: {
 
 ### Utility Functions
 
-- `loadBalance(binding, instances?)`: Load balances requests across multiple container instances
+- `getRandom(binding, instances?)`: Load balances requests across multiple container instances
 
 ## Examples
 
@@ -399,12 +399,12 @@ export class TimeoutContainer extends Container {
 
 ### Using Load Balancing
 
-This package includes a `loadBalance` helper which routes requests to one of N instances.
+This package includes a `getRandom` helper which routes requests to one of N instances.
 In the future, this will be automatically handled  with smart by Cloudflare Containers
 with autoscaling set to true, but is not yet implemented.
 
 ```typescript
-import { Container, getContainer, loadBalance } from '@cloudflare/containers';
+import { Container, getContainer, getRandom } from '@cloudflare/containers';
 
 export class MyContainer extends Container {
   defaultPort = 8080;
@@ -416,7 +416,7 @@ export default {
 
     // Example: Load balance across 5 container instances
     if (url.pathname === '/api') {
-      const containerInstance = await loadBalance(env.MY_CONTAINER, 5);
+      const containerInstance = await getRandom(env.MY_CONTAINER, 5);
       return containerInstance.fetch(request);
     }
 
