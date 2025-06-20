@@ -419,10 +419,10 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       });
     });
 
-    let errorFromBCW = await this.blockConcurrencyThrowable(async () => {
+    const errorFromBCW = await this.blockConcurrencyThrowable(async () => {
       // Start the container if it's not running
-      let triesUsed = await this.startContainerIfNotRunning(options);
-      let triesLeft = totalPortReadyTries - triesUsed;
+      const triesUsed = await this.startContainerIfNotRunning(options);
+      const triesLeft = totalPortReadyTries - triesUsed;
 
       // Check each port
       for (const port of portsToCheck) {
@@ -925,12 +925,14 @@ export class Container<Env = unknown> extends DurableObject<Env> {
           await handleError();
         }
 
+        await this.scheduleNextAlarm();
         this.container.start(startConfig);
         this.monitor = this.container.monitor();
+      } else {
+        await this.scheduleNextAlarm();
       }
 
       this.renewActivityTimeout();
-      await this.scheduleNextAlarm();
 
       // TODO: Make this the port I'm trying to get!
       const port = this.container.getTcpPort(waitOptions.portToCheck);
@@ -1036,6 +1038,9 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       })
       .finally(() => {
         this.monitorSetup = false;
+        // we resolve hte alarm so it processes again the container.
+        // A user that has an alarm constantly running might mean that
+        // their container is reboot looping.
         this.alarmSleepResolve('monitor finally');
       });
   }
@@ -1059,6 +1064,12 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       }
       return;
     }
+
+    // do not remove this, container DOs ALWAYS need an alarm right now.
+    // The only way for this DO to stop having alarms is:
+    //  1. The container is not running anymore.
+    //  2. Activity expired and it exits.
+    await this.scheduleNextAlarm();
 
     await this.tryCatch(async () => {
       const now = Math.floor(Date.now() / 1000);
@@ -1114,16 +1125,9 @@ export class Container<Env = unknown> extends DurableObject<Env> {
         return;
       }
 
-      // Only schedule next alarm if there are pending schedules or container is running
-      const scheduleCount =
-        Number(this.sql`SELECT COUNT(*) as count FROM container_schedules`[0]?.count) || 0;
-      const hasScheduledTasks = scheduleCount > 0;
-      if (hasScheduledTasks) {
-        await this.scheduleNextAlarm();
-      }
-
       if (this.isActivityExpired()) {
         await this.stopDueToInactivity();
+        await this.ctx.storage.deleteAlarm();
         return;
       }
 
@@ -1141,12 +1145,18 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       maxTime = maxTime === 0 ? Date.now() + 60 * 3 * 1000 : maxTime;
       maxTime = Math.min(maxTime, this.sleepAfterMs);
       const timeout = Math.max(0, maxTime - Date.now());
+      // This is a trick, we just do a setTimeout until we estimate
+      // that we should exit. Code can cancel this setTimeout by
+      // calling alarmSleepResolve.
       const timeoutRef = setTimeout(() => {
         resolve('setTimeout');
       }, timeout);
 
       await this.alarmSleepPromise;
       clearTimeout(timeoutRef);
+
+      // we exit and we have another alarm,
+      // the next alarm is the one that decides if it should stop the loop.
     });
   }
 
