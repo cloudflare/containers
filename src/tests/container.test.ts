@@ -2,8 +2,7 @@
 jest.mock('partyserver');
 
 import { Container } from '../lib/container';
-import { loadBalance } from '../lib/utils';
-import { Server } from 'partyserver';
+import { getRandom } from '../lib/utils';
 
 // Mock async hooks
 jest.mock('node:async_hooks', () => {
@@ -297,14 +296,14 @@ describe('Container', () => {
 });
 
 // Create load balance tests
-describe('loadBalance', () => {
+describe('getRandom', () => {
   test('should return a container stub', async () => {
     const mockBinding = {
       idFromString: jest.fn().mockReturnValue('mock-id'),
       get: jest.fn().mockReturnValue({ mockStub: true })
     };
 
-    const result = await loadBalance(mockBinding as any, 5);
+    const result = await getRandom(mockBinding as any, 5);
 
     expect(mockBinding.idFromString).toHaveBeenCalled();
     expect(mockBinding.get).toHaveBeenCalledWith('mock-id');

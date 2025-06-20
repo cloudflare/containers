@@ -1,5 +1,5 @@
-// import { Container, loadBalance, getContainer } from '@cloudflare/containers'; // in a real Worker
-import { Container, loadBalance, getContainer } from '../../src/index.js';
+// import { Container, getRandom, getContainer } from '@cloudflare/containers'; // in a real Worker
+import { Container, getRandom, getContainer } from '../../src/index.js';
 
 export class MyContainer extends Container {
   defaultPort = 8080; // The default port for the container to listen on
@@ -42,7 +42,7 @@ export default {
     }
 
     if (pathname.startsWith('/lb')) {
-      const containerInstance = await loadBalance(env.MY_CONTAINER, 3);
+      const containerInstance = await getRandom(env.MY_CONTAINER, 3);
       return containerInstance.fetch(request);
     }
 
