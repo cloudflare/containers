@@ -105,6 +105,29 @@ function getExitCodeFromError(error: unknown): number | null {
   return null;
 }
 
+/**
+ * Combines the existing user-defined signal with a signal that aborts after the timeout specified by waitInterval
+ */
+function addTimeoutSignal(existingSignal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+  const controller = new AbortController();
+  
+  // Forward existing signal abort
+  if (existingSignal?.aborted) {
+    controller.abort();
+    return controller.signal;
+  }
+  
+  existingSignal?.addEventListener('abort', () => controller.abort());
+  
+  // Add timeout
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  
+  // Clean up timeout if signal is aborted early
+  controller.signal.addEventListener('abort', () => clearTimeout(timeoutId));
+  
+  return controller.signal;
+}
+
 // ==== Stream helpers ====
 
 function attachOnClosedHook(stream: ReadableStream, onClosed: () => void): ReadableStream {
@@ -432,7 +455,8 @@ export class Container<Env = unknown> extends DurableObject<Env> {
         // Try to connect to the port multiple times
         for (let i = 0; i < triesLeft && !portReady; i++) {
           try {
-            await tcpPort.fetch('http://ping', { signal: options.abort });
+            const combinedSignal = addTimeoutSignal(options.abort, options.waitInterval);
+            await tcpPort.fetch('http://ping', { signal: combinedSignal });
 
             // Successfully connected to this port
             portReady = true;
@@ -937,7 +961,9 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       // TODO: Make this the port I'm trying to get!
       const port = this.container.getTcpPort(waitOptions.portToCheck);
       try {
-        await port.fetch('http://containerstarthealthcheck', { signal: waitOptions.abort });
+
+        const combinedSignal = addTimeoutSignal(waitOptions.abort, waitOptions.waitInterval);
+        await port.fetch('http://containerstarthealthcheck', { signal: combinedSignal });
         return tries;
       } catch (error) {
         if (isNotListeningError(error) && this.container.running) {

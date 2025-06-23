@@ -1,0 +1,37 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "container-package-class-worker",
+	"main": "src/index.ts",
+	"compatibility_date": "2025-05-06",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+
+	"observability": {
+		"enabled": true
+	},
+	"containers": [
+    {
+      "class_name": "MyContainer",
+      "image": "./Dockerfile",
+      "max_instances": 3,
+      "name": "container-package-class-example"
+    }
+  ],
+  "durable_objects": {
+	"bindings": [
+	  {
+		"class_name": "MyContainer",
+        "name": "MY_CONTAINER"
+      }
+    ]
+  },
+	"migrations": [
+		{
+			"new_sqlite_classes": [
+				"MyContainer"
+			],
+			"tag": "v1"
+		}
+	],
+}
