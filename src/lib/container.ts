@@ -269,6 +269,11 @@ export class Container<Env = unknown> extends DurableObject<Env> {
         created_at INTEGER DEFAULT (unixepoch())
       )
     `;
+
+    if (this.container.running) {
+      this.monitor = this.container.monitor();
+      this.setupMonitorCallbacks();
+    }
   }
 
   // ==========================
@@ -334,7 +339,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       options
     );
 
-    this.setupMonitor();
+    this.setupMonitorCallbacks();
   }
 
   /**
@@ -403,9 +408,9 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
     if (state.status === 'healthy' && this.container.running) {
       if (this.container.running && !this.monitor) {
-        // TODO: Is this needed?
+        // This is needed to setup the monitoring
         await this.startContainerIfNotRunning(options);
-        this.setupMonitor();
+        this.setupMonitorCallbacks();
       }
 
       return;
@@ -485,7 +490,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       throw errorFromBCW;
     }
 
-    this.setupMonitor();
+    this.setupMonitorCallbacks();
 
     await this.ctx.blockConcurrencyWhile(async () => {
       // All ports are ready
@@ -717,6 +722,15 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
       return res;
     } catch (e) {
+      if (!(e instanceof Error)) {
+        throw e;
+      }
+
+      // This error means that the container might've just restarted
+      if (e.message.includes('Network connection lost.')) {
+        return new Response('Container suddenly disconnected, try again', { status: 500 });
+      }
+
       console.error(`Error proxying request to container ${this.ctx.id}:`, e);
       return new Response(
         `Error proxying request to container: ${e instanceof Error ? e.message : String(e)}`,
@@ -971,6 +985,16 @@ export class Container<Env = unknown> extends DurableObject<Env> {
         // TODO: Don't hardcode to 3, use the max attempts
         // TODO: Make this error specific to this, but then catch it above w something else
         if (TEMPORARY_HARDCODED_ATTEMPT_MAX === tries) {
+          if (error instanceof Error && error.message.includes('Network connection lost')) {
+            // We have to abort here, the reasoning is that we might've found
+            // ourselves in an internal error where the Worker is stuck with a failed connection to the
+            // container services.
+            //
+            // Until we address this issue on the back-end CF side, we will need to abort the
+            // durable object so it retries to reconnect from scratch.
+            this.ctx.abort();
+          }
+
           throw new Error(NO_CONTAINER_INSTANCE_ERROR);
         }
 
@@ -982,7 +1006,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     throw new Error(`Container did not start after ${waitOptions.retries} attempts`);
   }
 
-  private setupMonitor() {
+  private setupMonitorCallbacks() {
     if (this.monitorSetup) {
       return;
     }
