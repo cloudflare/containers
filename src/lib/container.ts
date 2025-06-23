@@ -66,7 +66,7 @@ const TEMPORARY_HARDCODED_ATTEMPT_MAX = 6;
 
 function isErrorOfType(e: unknown, matchingString: string): boolean {
   const errorString = e instanceof Error ? e.message : String(e);
-  return errorString.includes(matchingString);
+  return errorString.toLowerCase().includes(matchingString);
 }
 
 const isNoInstanceError = (error: unknown): boolean =>
