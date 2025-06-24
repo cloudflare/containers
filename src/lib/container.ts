@@ -1080,7 +1080,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
   override async alarm(alarmProps: { isRetry: boolean; retryCount: number }): Promise<void> {
     if (alarmProps.isRetry && alarmProps.retryCount > MAX_ALAEM_RETRIES) {
-      // Only reschedule if there are pending tasks or container is running
       const scheduleCount =
         Number(this.sql`SELECT COUNT(*) as count FROM container_schedules`[0]?.count) || 0;
       const hasScheduledTasks = scheduleCount > 0;
@@ -1094,7 +1093,8 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     // The only way for this DO to stop having alarms is:
     //  1. The container is not running anymore.
     //  2. Activity expired and it exits.
-    this.ctx.storage.setAlarm(Date.now() + 1000);
+    this.alarmSleepResolve('set alarm');
+    void this.ctx.storage.setAlarm(Date.now() + 1000);
     await this.ctx.storage.sync();
 
     const now = Math.floor(Date.now() / 1000);
@@ -1143,14 +1143,17 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     await this.syncPendingStoppedEvents();
     // if not running and nothing to do, stop
     if (!this.container.running) {
-      this.ctx.storage.deleteAlarm();
+      await this.ctx.storage.deleteAlarm();
       await this.ctx.storage.sync();
+      this.alarmSleepResolve('activity expired');
       return;
     }
 
     if (this.isActivityExpired()) {
       await this.stopDueToInactivity();
       await this.ctx.storage.deleteAlarm();
+      await this.ctx.storage.sync();
+      this.alarmSleepResolve('activity expired');
       return;
     }
 
@@ -1176,8 +1179,8 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       resolve('setTimeout');
     }, timeout);
 
-    await this.ctx.storage.setAlarm(timeout + Date.now());
-    this.ctx.storage.sync();
+    void this.ctx.storage.setAlarm(timeout + Date.now());
+    await this.ctx.storage.sync();
 
     // we exit and we have another alarm,
     // the next alarm is the one that decides if it should stop the loop.
