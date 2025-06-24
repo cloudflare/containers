@@ -1143,6 +1143,8 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     await this.syncPendingStoppedEvents();
     // if not running and nothing to do, stop
     if (!this.container.running) {
+      this.ctx.storage.deleteAlarm();
+      await this.ctx.storage.sync();
       return;
     }
 
