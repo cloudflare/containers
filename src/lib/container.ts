@@ -28,6 +28,7 @@ const CONTAINER_STATE_KEY = '__CF_CONTAINER_STATE';
 // as according to DO docs at https://developers.cloudflare.com/durable-objects/api/alarms/
 // the maximum amount for alarm retries is 6.
 const MAX_ALAEM_RETRIES = 3;
+const PING_TIMEOUT_MS = 1500;
 
 const DEFAULT_SLEEP_AFTER = '10m'; // Default sleep after inactivity time
 const INSTANCE_POLL_INTERVAL_MS = 300; // Default interval for polling container state
@@ -110,21 +111,21 @@ function getExitCodeFromError(error: unknown): number | null {
  */
 function addTimeoutSignal(existingSignal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
   const controller = new AbortController();
-  
+
   // Forward existing signal abort
   if (existingSignal?.aborted) {
     controller.abort();
     return controller.signal;
   }
-  
+
   existingSignal?.addEventListener('abort', () => controller.abort());
-  
+
   // Add timeout
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  
+
   // Clean up timeout if signal is aborted early
   controller.signal.addEventListener('abort', () => clearTimeout(timeoutId));
-  
+
   return controller.signal;
 }
 
@@ -455,7 +456,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
         // Try to connect to the port multiple times
         for (let i = 0; i < triesLeft && !portReady; i++) {
           try {
-            const combinedSignal = addTimeoutSignal(options.abort, options.waitInterval);
+            const combinedSignal = addTimeoutSignal(options.abort, PING_TIMEOUT_MS);
             await tcpPort.fetch('http://ping', { signal: combinedSignal });
 
             // Successfully connected to this port
@@ -961,8 +962,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       // TODO: Make this the port I'm trying to get!
       const port = this.container.getTcpPort(waitOptions.portToCheck);
       try {
-
-        const combinedSignal = addTimeoutSignal(waitOptions.abort, waitOptions.waitInterval);
+        const combinedSignal = addTimeoutSignal(waitOptions.abort, PING_TIMEOUT_MS);
         await port.fetch('http://containerstarthealthcheck', { signal: combinedSignal });
         return tries;
       } catch (error) {
