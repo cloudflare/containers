@@ -1091,7 +1091,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     //  2. Activity expired and it exits.
     this.ctx.storage.setAlarm(Date.now() + 1000);
     await this.ctx.storage.sync();
-    await this.alarmSleepPromise;
 
     //
     const now = Math.floor(Date.now() / 1000);
@@ -1171,6 +1170,9 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     setTimeout(() => {
       resolve('setTimeout');
     }, timeout);
+
+    await this.ctx.storage.setAlarm(timeout + Date.now());
+    this.ctx.storage.sync();
 
     // we exit and we have another alarm,
     // the next alarm is the one that decides if it should stop the loop.
