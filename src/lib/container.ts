@@ -237,6 +237,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     this.state = new ContainerState(this.ctx.storage);
 
     this.ctx.blockConcurrencyWhile(async () => {
+      await this.ctx.storage.deleteAlarm();
       this.renewActivityTimeout();
 
       // First thing, schedule the next alarms
@@ -1014,18 +1015,9 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     this.monitorSetup = true;
     this.monitor
       ?.then(async () => {
-        const state = await this.state.getState();
-        await this.ctx.blockConcurrencyWhile(async () => {
-          const newState = await this.state.getState();
-          // already informed
-          if (newState.status !== state.status) {
-            return;
-          }
-
-          await this.state.setStoppedWithCode(0);
-          await this.onStop({ exitCode: 0, reason: 'exit' });
-          await this.state.setStopped();
-        });
+        await this.state.setStoppedWithCode(0);
+        await this.onStop({ exitCode: 0, reason: 'exit' });
+        await this.state.setStopped();
       })
       .catch(async (error: unknown) => {
         if (isNoInstanceError(error)) {
@@ -1035,23 +1027,13 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
         const exitCode = getExitCodeFromError(error);
         if (exitCode !== null) {
-          const state = await this.state.getState();
-          this.ctx.blockConcurrencyWhile(async () => {
-            const newState = await this.state.getState();
-            // already informed
-            if (newState.status !== state.status) {
-              return;
-            }
-
-            await this.state.setStoppedWithCode(exitCode);
-            await this.onStop({
-              exitCode,
-              reason: isRuntimeSignalledError(error) ? 'runtime_signal' : 'exit',
-            });
-
-            await this.state.setStopped();
+          await this.state.setStoppedWithCode(exitCode);
+          await this.onStop({
+            exitCode,
+            reason: isRuntimeSignalledError(error) ? 'runtime_signal' : 'exit',
           });
 
+          await this.state.setStopped();
           return;
         }
 
@@ -1093,140 +1075,118 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     // The only way for this DO to stop having alarms is:
     //  1. The container is not running anymore.
     //  2. Activity expired and it exits.
-    await this.scheduleNextAlarm();
+    this.ctx.storage.setAlarm(Date.now() + 1000);
+    await this.ctx.storage.sync();
+    await this.alarmSleepPromise;
 
-    await this.tryCatch(async () => {
-      const now = Math.floor(Date.now() / 1000);
+    //
+    const now = Math.floor(Date.now() / 1000);
+    //
+    // Get all schedules that should be executed now
+    const result = this.sql<{
+      id: string;
+      callback: string;
+      payload: string;
+      type: 'scheduled' | 'delayed';
+      time: number;
+    }>`
+         SELECT * FROM container_schedules;
+       `;
+    let maxTime = 0;
 
-      // Get all schedules that should be executed now
-      const result = this.sql<{
-        id: string;
-        callback: string;
-        payload: string;
-        type: 'scheduled' | 'delayed';
-        time: number;
-      }>`
-        SELECT * FROM container_schedules;
-      `;
-
-      let maxTime = 0;
-
-      // Process each due schedule
-      for (const row of result) {
-        if (row.time > now) {
-          maxTime = Math.max(maxTime, row.time * 1000);
-          continue;
-        }
-
-        const callback = this[row.callback as keyof this];
-
-        if (!callback || typeof callback !== 'function') {
-          console.error(`Callback ${row.callback} not found or is not a function`);
-          continue;
-        }
-
-        // Create a schedule object for context
-        const schedule = this.getSchedule(row.id);
-
-        try {
-          // Parse the payload and execute the callback
-          const payload = row.payload ? JSON.parse(row.payload) : undefined;
-
-          // Use context storage to execute the callback with proper 'this' binding
-          await callback.call(this, payload, await schedule);
-        } catch (e) {
-          console.error(`Error executing scheduled callback "${row.callback}":`, e);
-        }
-
-        // Delete the schedule after execution (one-time schedules)
-        this.sql`DELETE FROM container_schedules WHERE id = ${row.id}`;
+    // Process each due schedule
+    for (const row of result) {
+      if (row.time > now) {
+        maxTime = Math.max(maxTime, row.time * 1000);
+        continue;
       }
 
-      await this.syncPendingStoppedEvents();
-
-      // if not running and nothing to do, stop
-      if (!this.container.running) {
-        return;
+      const callback = this[row.callback as keyof this];
+      if (!callback || typeof callback !== 'function') {
+        console.error(`Callback ${row.callback} not found or is not a function`);
+        continue;
       }
 
-      if (this.isActivityExpired()) {
-        await this.stopDueToInactivity();
-        await this.ctx.storage.deleteAlarm();
-        return;
+      // Create a schedule object for context
+      const schedule = this.getSchedule(row.id);
+
+      try {
+        // Parse the payload and execute the callback
+        const payload = row.payload ? JSON.parse(row.payload) : undefined;
+
+        // Use context storage to execute the callback with proper 'this' binding
+        await callback.call(this, payload, await schedule);
+      } catch (e) {
+        console.error(`Error executing scheduled callback "${row.callback}":`, e);
       }
 
-      let resolve = (_: unknown) => {};
-      this.alarmSleepPromise = new Promise(res => {
-        this.alarmSleepResolve = val => {
-          // add here any debugging if you need to
-          res(val);
-        };
+      // Delete the schedule after execution (one-time schedules)
+      this.sql`DELETE FROM container_schedules WHERE id = ${row.id}`;
+    }
 
-        resolve = res;
-      });
+    await this.syncPendingStoppedEvents();
+    // if not running and nothing to do, stop
+    if (!this.container.running) {
+      return;
+    }
 
-      // Math.min(3m or maxTime, sleepTimeout)
-      maxTime = maxTime === 0 ? Date.now() + 60 * 3 * 1000 : maxTime;
-      maxTime = Math.min(maxTime, this.sleepAfterMs);
-      const timeout = Math.max(0, maxTime - Date.now());
-      // This is a trick, we just do a setTimeout until we estimate
-      // that we should exit. Code can cancel this setTimeout by
-      // calling alarmSleepResolve.
-      const timeoutRef = setTimeout(() => {
-        resolve('setTimeout');
-      }, timeout);
+    if (this.isActivityExpired()) {
+      await this.stopDueToInactivity();
+      await this.ctx.storage.deleteAlarm();
+      return;
+    }
 
-      await this.alarmSleepPromise;
-      clearTimeout(timeoutRef);
+    let resolve = (_: unknown) => {};
+    this.alarmSleepPromise = new Promise(res => {
+      this.alarmSleepResolve = val => {
+        // add here any debugging if you need to
+        res(val);
+      };
 
-      // we exit and we have another alarm,
-      // the next alarm is the one that decides if it should stop the loop.
+      resolve = res;
     });
+
+    // Math.min(3m or maxTime, sleepTimeout)
+    maxTime = maxTime === 0 ? Date.now() + 60 * 3 * 1000 : maxTime;
+    maxTime = Math.min(maxTime, this.sleepAfterMs);
+    const timeout = Math.max(0, maxTime - Date.now());
+
+    // This is a trick, we just do a setTimeout until we estimate
+    // that we should exit. Code can cancel this setTimeout by
+    // calling alarmSleepResolve.
+    setTimeout(() => {
+      resolve('setTimeout');
+    }, timeout);
+
+    // we exit and we have another alarm,
+    // the next alarm is the one that decides if it should stop the loop.
   }
 
   // synchronises container state with the container source of truth to process events
   private async syncPendingStoppedEvents() {
     const state = await this.state.getState();
     if (!this.container.running && state.status === 'healthy') {
-      await new Promise(res =>
-        // setTimeout to process monitor() just in case
-        setTimeout(async () => {
-          await this.ctx.blockConcurrencyWhile(async () => {
-            const newState = await this.state.getState();
-            if (newState.status !== state.status) {
-              // we got it, sync'd
-              return;
-            }
+      const newState = await this.state.getState();
+      if (newState.status !== state.status) {
+        // we got it, sync'd
+        return;
+      }
 
-            // we lost the exit code! :(
-            await this.onStop({ exitCode: 0, reason: 'exit' });
-            await this.state.setStopped();
-          });
-
-          res(true);
-        })
-      );
-
+      // we lost the exit code! :(
+      await this.onStop({ exitCode: 0, reason: 'exit' });
+      await this.state.setStopped();
       return;
     }
 
     if (!this.container.running && state.status === 'stopped_with_code') {
-      await new Promise(res =>
-        // setTimeout to process monitor() just in case
-        setTimeout(async () => {
-          await this.ctx.blockConcurrencyWhile(async () => {
-            const newState = await this.state.getState();
-            if (newState.status !== state.status) {
-              // we got it, sync'd
-              return;
-            }
+      const newState = await this.state.getState();
+      if (newState.status !== state.status) {
+        // we got it, sync'd
+        return;
+      }
 
-            await this.onStop({ exitCode: state.exitCode ?? 0, reason: 'exit' });
-            await this.state.setStopped();
-            res(true);
-          });
-        })
-      );
+      await this.onStop({ exitCode: state.exitCode ?? 0, reason: 'exit' });
+      await this.state.setStopped();
       return;
     }
   }
