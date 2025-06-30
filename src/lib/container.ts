@@ -442,6 +442,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
     // trigger all onStop that we didn't do yet
     await this.syncPendingStoppedEvents();
+
     const abortedSignal = new Promise(res => {
       options.abort?.addEventListener('abort', () => {
         res(true);
@@ -730,6 +731,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       const res = await tcpPort.fetch(containerUrl, request);
       if (res.webSocket) {
         this.openStreamCount++;
+        // TODO: This does not seem to work :(
         res.webSocket.addEventListener('close', async () => {
           this.openStreamCount--;
           this.renewActivityTimeout();
@@ -794,6 +796,8 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   // ==========================
 
   private container: NonNullable<DurableObject['ctx']['container']>;
+  // onStopCalled will be true when we are in the middle of an onStop call
+  private onStopCalled = false;
   private state: ContainerState;
   private monitor: Promise<unknown> | undefined;
 
@@ -802,8 +806,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   private openStreamCount = 0;
 
   private sleepAfterMs = 0;
-
-  private clearTimeout = (_: unknown) => {};
 
   // ==========================
   //     GENERAL HELPERS
@@ -963,7 +965,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       // TODO: Make this the port I'm trying to get!
       const port = this.container.getTcpPort(waitOptions.portToCheck);
       try {
-        const combinedSignal = addTimeoutSignal(waitOptions.abort, PING_TIMEOUT_MS);
+        const combinedSignal = addTimeoutSignal(waitOptions.abort, PING_TIMEOUT_MS + 3000);
         await port.fetch('http://containerstarthealthcheck', { signal: combinedSignal });
         return tries;
       } catch (error) {
@@ -972,11 +974,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
         }
 
         if (!this.container.running && isNotListeningError(error)) {
-          try {
-            await this.onError(new Error(`container crashed when checking if it was ready`));
-          } catch {}
-
-          throw error;
+          await handleError();
         }
 
         console.warn(
@@ -1027,17 +1025,8 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     this.monitorSetup = true;
     this.monitor
       ?.then(async () => {
-        const state = await this.state.getState();
         await this.ctx.blockConcurrencyWhile(async () => {
-          const newState = await this.state.getState();
-          // already informed
-          if (newState.status !== state.status) {
-            return;
-          }
-
           await this.state.setStoppedWithCode(0);
-          await this.onStop({ exitCode: 0, reason: 'exit' });
-          await this.state.setStopped();
         });
       })
       .catch(async (error: unknown) => {
@@ -1048,37 +1037,15 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
         const exitCode = getExitCodeFromError(error);
         if (exitCode !== null) {
-          const state = await this.state.getState();
-          this.ctx.blockConcurrencyWhile(async () => {
-            const newState = await this.state.getState();
-            // already informed
-            if (newState.status !== state.status) {
-              return;
-            }
-
-            await this.state.setStoppedWithCode(exitCode);
-            await this.onStop({
-              exitCode,
-              reason: isRuntimeSignalledError(error) ? 'runtime_signal' : 'exit',
-            });
-
-            await this.state.setStopped();
-          });
-
-          return;
+          await this.state.setStoppedWithCode(exitCode);
+          this.monitorSetup = false;
+          this.monitor = undefined;
         }
 
         try {
           // TODO: Be able to retrigger onError
           await this.onError(error);
         } catch {}
-      })
-      .finally(() => {
-        this.monitorSetup = false;
-        // we resolve hte alarm so it processes again the container.
-        // A user that has an alarm constantly running might mean that
-        // their container is reboot looping.
-        this.clearTimeout('monitor finally');
       });
   }
 
@@ -1106,7 +1073,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     // The only way for this DO to stop having alarms is:
     //  1. The container is not running anymore.
     //  2. Activity expired and it exits.
-    this.clearTimeout('set alarm');
     void this.ctx.storage.setAlarm(Date.now() + 1000);
     await this.ctx.storage.sync();
 
@@ -1153,40 +1119,24 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       this.sql`DELETE FROM container_schedules WHERE id = ${row.id}`;
     }
 
-    await this.syncPendingStoppedEvents();
     // if not running and nothing to do, stop
     if (!this.container.running) {
+      await this.syncPendingStoppedEvents();
       await this.ctx.storage.deleteAlarm();
       await this.ctx.storage.sync();
-      this.clearTimeout('activity expired');
       return;
     }
 
     if (this.isActivityExpired()) {
       await this.stopDueToInactivity();
-      await this.ctx.storage.deleteAlarm();
       await this.ctx.storage.sync();
-      this.clearTimeout('activity expired');
       return;
     }
-
-    let resolve = (_: unknown) => {};
 
     // Math.min(3m or maxTime, sleepTimeout)
     maxTime = maxTime === 0 ? Date.now() + 60 * 3 * 1000 : maxTime;
     maxTime = Math.min(maxTime, this.sleepAfterMs);
     const timeout = Math.max(0, maxTime - Date.now());
-
-    // This is a trick, we just do a setTimeout until we estimate
-    // that we should exit. Code can cancel this setTimeout by
-    // calling alarmSleepResolve.
-    const t = setTimeout(() => {
-      resolve('setTimeout');
-    }, timeout);
-    this.clearTimeout = () => {
-      clearTimeout(t);
-    };
-
     void this.ctx.storage.setAlarm(timeout + Date.now());
     await this.ctx.storage.sync();
 
@@ -1196,49 +1146,38 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
   // synchronises container state with the container source of truth to process events
   private async syncPendingStoppedEvents() {
+    if (this.onStopCalled) {
+      return;
+    }
+
     const state = await this.state.getState();
     if (!this.container.running && state.status === 'healthy') {
-      await new Promise(res =>
-        // setTimeout to process monitor() just in case
-        setTimeout(async () => {
-          await this.ctx.blockConcurrencyWhile(async () => {
-            const newState = await this.state.getState();
-            if (newState.status !== state.status) {
-              // we got it, sync'd
-              return;
-            }
-
-            // we lost the exit code! :(
-            await this.onStop({ exitCode: 0, reason: 'exit' });
-            await this.state.setStopped();
-          });
-
-          res(true);
-        })
-      );
-
+      await this.callOnStop({ exitCode: 0, reason: 'exit' });
       return;
     }
 
     if (!this.container.running && state.status === 'stopped_with_code') {
-      await new Promise(res =>
-        // setTimeout to process monitor() just in case
-        setTimeout(async () => {
-          await this.ctx.blockConcurrencyWhile(async () => {
-            const newState = await this.state.getState();
-            if (newState.status !== state.status) {
-              // we got it, sync'd
-              return;
-            }
-
-            await this.onStop({ exitCode: state.exitCode ?? 0, reason: 'exit' });
-            await this.state.setStopped();
-            res(true);
-          });
-        })
-      );
+      await this.callOnStop({ exitCode: state.exitCode ?? 0, reason: 'exit' });
       return;
     }
+  }
+
+  private async callOnStop(onStopParams: StopParams) {
+    if (this.onStopCalled) {
+      return;
+    }
+
+    this.onStopCalled = true;
+    const promise = this.onStop(onStopParams);
+    if (promise instanceof Promise) {
+      await promise.finally(() => {
+        this.onStopCalled = false;
+      });
+    } else {
+      this.onStopCalled = false;
+    }
+
+    await this.state.setStopped();
   }
 
   /**
@@ -1253,8 +1192,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     if (existingAlarm === null || existingAlarm > nextTime || existingAlarm < Date.now()) {
       await this.ctx.storage.setAlarm(nextTime);
       await this.ctx.storage.sync();
-
-      this.clearTimeout('scheduling next alarm');
     }
   }
 
