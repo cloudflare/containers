@@ -383,18 +383,24 @@ export class Container<Env = unknown> extends DurableObject<Env> {
    * 3. defaultPort (if neither of the above is specified)
    *
    * @param ports - The ports to wait for (if undefined, uses requiredPorts or defaultPort)
-   * @param maxTries - Maximum number of attempts to connect to each port before failing
+   * @param cancellationOptions - Options for cancellation of the port check
+   * @param startOptions - Options for starting the container
    * @throws Error if port checks fail after maxTries attempts
    */
-  public async startAndWaitForPorts(
-    ports?: number | number[],
+  public async startAndWaitForPorts({
+    ports,
+    cancellationOptions,
+    startOptions,
+  }: {
+    ports?: number | number[];
     cancellationOptions?: {
       abort?: AbortSignal;
       instanceGetTimeoutMS?: number;
       portReadyTimeoutMS?: number;
       waitInterval?: number;
-    }
-  ): Promise<void> {
+    };
+    startOptions?: ContainerStartConfigOptions;
+  } = {}): Promise<void> {
     // Determine which ports to check
     let portsToCheck: number[] = [];
 
@@ -433,7 +439,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     if (state.status === 'healthy' && this.container.running) {
       if (this.container.running && !this.monitor) {
         // This is needed to setup the monitoring
-        await this.startContainerIfNotRunning(options);
+        await this.startContainerIfNotRunning(options, startOptions);
         this.setupMonitorCallbacks();
       }
 
@@ -691,7 +697,10 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     const state = await this.state.getState();
     if (!this.container.running || state.status !== 'healthy') {
       try {
-        await this.startAndWaitForPorts(port, { abort: request.signal });
+        await this.startAndWaitForPorts({
+          ports: port,
+          cancellationOptions: { abort: request.signal },
+        });
       } catch (e) {
         if (isNoInstanceError(e)) {
           return new Response(
