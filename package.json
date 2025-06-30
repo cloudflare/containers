@@ -1,26 +1,19 @@
 {
   "name": "@cloudflare/containers",
-  "version": "0.0.14",
+  "version": "0.0.15",
   "description": "Helper class for container-enabled Durable Objects",
-  "main": "dist/index.js",
-  "module": "dist/index.mjs",
-  "types": "dist/index.d.ts",
   "repository": {
     "type": "git",
     "url": "https://github.com/cloudflare/containers"
   },
-  "files": [
-    "dist"
-  ],
   "scripts": {
-    "build": "rm -rf dist && tsup src/*.ts --outDir dist --external cloudflare:workers --dts --sourcemap --format esm",
+    "build": "rm -rf dist && tsup src/index.ts src/lib/*.ts src/types/*.ts --outDir dist --external cloudflare:workers --dts --sourcemap --format esm",
     "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts,.tsx --config .eslintrc.js",
     "format": "prettier --write \"src/**/*.ts\"",
     "test": "jest",
-    "test:watch": "jest --watch",
-    "prepare": "npm run build"
+    "test:watch": "jest --watch"
   },
   "exports": {
     ".": {
