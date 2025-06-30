@@ -456,7 +456,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
     const errorFromBCW = await this.blockConcurrencyThrowable(async () => {
       // Start the container if it's not running
-      const triesUsed = await this.startContainerIfNotRunning(options);
+      const triesUsed = await this.startContainerIfNotRunning(options, startOptions);
       const triesLeft = totalPortReadyTries - triesUsed;
 
       // Check each port
