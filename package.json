@@ -1,26 +1,18 @@
 {
   "name": "@cloudflare/containers",
-  "version": "0.0.14",
+  "version": "0.0.15",
   "description": "Helper class for container-enabled Durable Objects",
-  "main": "dist/index.js",
-  "module": "dist/index.mjs",
-  "types": "dist/index.d.ts",
   "repository": {
     "type": "git",
     "url": "https://github.com/cloudflare/containers"
   },
-  "files": [
-    "dist"
-  ],
   "scripts": {
-    "build": "rm -rf dist && tsup src/*.ts --outDir dist --external cloudflare:workers --dts --sourcemap --format esm",
-    "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
+    "build": "tsc -p .",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts,.tsx --config .eslintrc.js",
     "format": "prettier --write \"src/**/*.ts\"",
     "test": "jest",
-    "test:watch": "jest --watch",
-    "prepare": "npm run build"
+    "test:watch": "jest --watch"
   },
   "exports": {
     ".": {
@@ -37,7 +29,8 @@
   ],
   "author": "",
   "license": "ISC",
-  "dependencies": {},
+  "dependencies": {
+  },
   "devDependencies": {
     "@types/jest": "^29.5.14",
     "@types/node": "^22.15.3",
@@ -48,7 +41,7 @@
     "prettier": "^3.5.3",
     "ts-jest": "^29.3.2",
     "tsup": "^8.0.2",
-    "typescript": "^5.8.3",
-    "@cloudflare/workers-types": "^4.20250403.0"
+    "typescript": "latest",
+    "@cloudflare/workers-types": "^4.20250620.0"
   }
 }

@@ -1,14 +1,18 @@
 {
   "compilerOptions": {
-    "target": "esnext",
-    "lib": ["esnext"],
+    "target": "es2022",
+    "lib": ["ES2022"],
     "experimentalDecorators": true,
-    "module": "esnext",
-    "moduleResolution": "node",
-    "types": ["@cloudflare/workers-types"],
-    "resolveJsonModule": true,
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "sourceMap": true,
+    "types": ["@cloudflare/workers-types", "node"],
+    "moduleDetection": "force",
     "allowJs": true,
-    "noEmit": true,
+    "outDir": "dist",
+    "declaration": true, // Generate .d.ts files
+    "esModuleInterop": true,
+    "skipLibCheck": true,
     "isolatedModules": true,
     "allowSyntheticDefaultImports": true,
     "forceConsistentCasingInFileNames": true,
@@ -19,9 +23,8 @@
     "noUnusedParameters": true,
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
-    "skipLibCheck": true,
     "noImplicitOverride": true
   },
-  "include": ["src/**/*"],
+  "include": ["src/lib/*.ts", "src/index.ts", "src/types/*.ts"],
   "exclude": ["node_modules", "dist", "**/*.test.ts"]
 }
