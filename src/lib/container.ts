@@ -1146,10 +1146,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
   // synchronises container state with the container source of truth to process events
   private async syncPendingStoppedEvents() {
-    if (this.onStopCalled) {
-      return;
-    }
-
     const state = await this.state.getState();
     if (!this.container.running && state.status === 'healthy') {
       await this.callOnStop({ exitCode: 0, reason: 'exit' });
