@@ -7,8 +7,7 @@
     "url": "https://github.com/cloudflare/containers"
   },
   "scripts": {
-    "build": "rm -rf dist && tsup src/index.ts src/lib/*.ts src/types/*.ts --outDir dist --external cloudflare:workers --dts --sourcemap --format esm",
-    "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
+    "build": "tsc -p .",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts,.tsx --config .eslintrc.js",
     "format": "prettier --write \"src/**/*.ts\"",
@@ -30,7 +29,8 @@
   ],
   "author": "",
   "license": "ISC",
-  "dependencies": {},
+  "dependencies": {
+  },
   "devDependencies": {
     "@types/jest": "^29.5.14",
     "@types/node": "^22.15.3",
@@ -41,7 +41,7 @@
     "prettier": "^3.5.3",
     "ts-jest": "^29.3.2",
     "tsup": "^8.0.2",
-    "typescript": "^5.8.3",
-    "@cloudflare/workers-types": "^4.20250403.0"
+    "typescript": "latest",
+    "@cloudflare/workers-types": "^4.20250620.0"
   }
 }
