@@ -1,16 +1,19 @@
 {
   "name": "@cloudflare/containers",
-  "version": "0.0.13",
+  "version": "0.0.14",
   "description": "Helper class for container-enabled Durable Objects",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
-  "repository": "cloudflare/containers",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cloudflare/containers"
+  },
   "files": [
     "dist"
   ],
   "scripts": {
-    "build": "tsup src/index.ts --external cloudflare:workers --format cjs,esm --dts",
+    "build": "rm -rf dist && tsup src/*.ts --outDir dist --external cloudflare:workers --dts --sourcemap --format esm",
     "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts,.tsx --config .eslintrc.js",
@@ -19,9 +22,16 @@
     "test:watch": "jest --watch",
     "prepare": "npm run build"
   },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
+    }
+  },
   "keywords": [
-    "partyserver",
     "containers",
+    "durable objects",
     "durable-objects",
     "cloudflare"
   ],
