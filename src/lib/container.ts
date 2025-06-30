@@ -965,7 +965,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       // TODO: Make this the port I'm trying to get!
       const port = this.container.getTcpPort(waitOptions.portToCheck);
       try {
-        const combinedSignal = addTimeoutSignal(waitOptions.abort, PING_TIMEOUT_MS + 3000);
+        const combinedSignal = addTimeoutSignal(waitOptions.abort, PING_TIMEOUT_MS);
         await port.fetch('http://containerstarthealthcheck', { signal: combinedSignal });
         return tries;
       } catch (error) {
