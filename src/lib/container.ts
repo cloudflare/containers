@@ -259,10 +259,9 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     super(ctx, env);
 
     this.state = new ContainerState(this.ctx.storage);
+    this.renewActivityTimeout();
 
     this.ctx.blockConcurrencyWhile(async () => {
-      this.renewActivityTimeout();
-
       // First thing, schedule the next alarms
       await this.scheduleNextAlarm();
     });
@@ -1058,6 +1057,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
    * Executes any scheduled tasks that are due
    */
 
+  previousTimeout?: ReturnType<typeof setTimeout>;
   override async alarm(alarmProps: { isRetry: boolean; retryCount: number }): Promise<void> {
     if (alarmProps.isRetry && alarmProps.retryCount > MAX_ALAEM_RETRIES) {
       const scheduleCount =
@@ -1135,6 +1135,12 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
     // Math.min(3m or maxTime, sleepTimeout)
     maxTime = maxTime === 0 ? Date.now() + 60 * 3 * 1000 : maxTime;
+    if (this.previousTimeout !== undefined) {
+      clearTimeout(this.previousTimeout);
+    }
+
+    this.previousTimeout = setTimeout(() => {}, maxTime);
+
     maxTime = Math.min(maxTime, this.sleepAfterMs);
     const timeout = Math.max(0, maxTime - Date.now());
     void this.ctx.storage.setAlarm(timeout + Date.now());
