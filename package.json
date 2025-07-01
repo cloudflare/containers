@@ -1,10 +1,10 @@
 {
   "name": "@cloudflare/containers",
-  "version": "0.0.16",
+  "version": "0.0.17",
   "description": "Helper class for container-enabled Durable Objects",
   "repository": {
     "type": "git",
-    "url": "https://github.com/cloudflare/containers"
+    "url": "git+https://github.com/cloudflare/containers.git"
   },
   "scripts": {
     "build": "tsc -p .",
@@ -21,7 +21,9 @@
       "require": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "keywords": [
     "containers",
     "durable objects",
@@ -30,8 +32,7 @@
   ],
   "author": "",
   "license": "ISC",
-  "dependencies": {
-  },
+  "dependencies": {},
   "devDependencies": {
     "@types/jest": "^29.5.14",
     "@types/node": "^22.15.3",
