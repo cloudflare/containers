@@ -806,6 +806,8 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   private openStreamCount = 0;
 
   private sleepAfterMs = 0;
+  private alarmSleepPromise?: Promise<unknown>;
+  private alarmSleepResolve?: (value: unknown) => void;
 
   // ==========================
   //     GENERAL HELPERS
@@ -1046,6 +1048,13 @@ export class Container<Env = unknown> extends DurableObject<Env> {
           // TODO: Be able to retrigger onError
           await this.onError(error);
         } catch {}
+      })
+      .finally(() => {
+        this.monitorSetup = false;
+        // we resolve the alarm so it processes again the container.
+        // A user that has an alarm constantly running might mean that
+        // their container is reboot looping.
+        this.alarmSleepResolve?.('monitor finally');
       });
   }
 
@@ -1073,8 +1082,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     // The only way for this DO to stop having alarms is:
     //  1. The container is not running anymore.
     //  2. Activity expired and it exits.
-    void this.ctx.storage.setAlarm(Date.now() + 1000);
-    await this.ctx.storage.sync();
+    await this.scheduleNextAlarm();
 
     const now = Math.floor(Date.now() / 1000);
     // Get all schedules that should be executed now
@@ -1119,26 +1127,46 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       this.sql`DELETE FROM container_schedules WHERE id = ${row.id}`;
     }
 
+    await this.syncPendingStoppedEvents();
+
     // if not running and nothing to do, stop
     if (!this.container.running) {
-      await this.syncPendingStoppedEvents();
-      await this.ctx.storage.deleteAlarm();
-      await this.ctx.storage.sync();
       return;
     }
 
     if (this.isActivityExpired()) {
       await this.stopDueToInactivity();
-      await this.ctx.storage.sync();
+      await this.ctx.storage.deleteAlarm();
       return;
     }
+
+    let resolve = (_: unknown) => {};
+    this.alarmSleepPromise = new Promise(res => {
+      this.alarmSleepResolve = val => {
+        // add here any debugging if you need to
+        res(val);
+      };
+
+      resolve = res;
+    });
 
     // Math.min(3m or maxTime, sleepTimeout)
     maxTime = maxTime === 0 ? Date.now() + 60 * 3 * 1000 : maxTime;
     maxTime = Math.min(maxTime, this.sleepAfterMs);
     const timeout = Math.max(0, maxTime - Date.now());
-    void this.ctx.storage.setAlarm(timeout + Date.now());
+    
+    // This is a trick, we just do a setTimeout until we estimate
+    // that we should exit. Code can cancel this setTimeout by
+    // calling alarmSleepResolve.
+    const timeoutRef = setTimeout(() => {
+      resolve('setTimeout');
+    }, timeout);
+
+    await this.ctx.storage.setAlarm(timeout + Date.now());
     await this.ctx.storage.sync();
+
+    await this.alarmSleepPromise;
+    clearTimeout(timeoutRef);
 
     // we exit and we have another alarm,
     // the next alarm is the one that decides if it should stop the loop.
@@ -1188,6 +1216,8 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     if (existingAlarm === null || existingAlarm > nextTime || existingAlarm < Date.now()) {
       await this.ctx.storage.setAlarm(nextTime);
       await this.ctx.storage.sync();
+
+      this.alarmSleepResolve?.('scheduling next alarm');
     }
   }
 
