@@ -1073,7 +1073,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     // The only way for this DO to stop having alarms is:
     //  1. The container is not running anymore.
     //  2. Activity expired and it exits.
-    void this.ctx.storage.setAlarm(Date.now() + 1000);
+    await this.ctx.storage.setAlarm(Date.now() + 1000);
     await this.ctx.storage.sync();
 
     const now = Math.floor(Date.now() / 1000);
@@ -1137,8 +1137,16 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     maxTime = maxTime === 0 ? Date.now() + 60 * 3 * 1000 : maxTime;
     maxTime = Math.min(maxTime, this.sleepAfterMs);
     const timeout = Math.max(0, maxTime - Date.now());
-    void this.ctx.storage.setAlarm(timeout + Date.now());
+    await this.ctx.storage.setAlarm(timeout + Date.now());
     await this.ctx.storage.sync();
+
+    // await a sleep for maxTime to keep the DO alive for
+    // at least this long
+    await new Promise<void>(resolve => {
+      setTimeout(() => {
+        resolve();
+      }, timeout);
+    });
 
     // we exit and we have another alarm,
     // the next alarm is the one that decides if it should stop the loop.

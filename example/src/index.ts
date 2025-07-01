@@ -3,7 +3,7 @@ import { Container, getRandom, getContainer } from '../../src/index.js';
 
 export class MyContainer extends Container {
   defaultPort = 8080; // The default port for the container to listen on
-  sleepAfter = '3m'; // Sleep the container if no requests are made in this timeframe
+  sleepAfter = '6m'; // Sleep the container if no requests are made in this timeframe
 
   envVars = {
     MESSAGE: 'I was passed in via the container class!',
