@@ -1137,8 +1137,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     maxTime = maxTime === 0 ? Date.now() + 60 * 3 * 1000 : maxTime;
     maxTime = Math.min(maxTime, this.sleepAfterMs);
     const timeout = Math.max(0, maxTime - Date.now());
-    await this.ctx.storage.setAlarm(timeout + Date.now());
-    await this.ctx.storage.sync();
 
     // await a sleep for maxTime to keep the DO alive for
     // at least this long
