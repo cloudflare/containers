@@ -1,5 +1,5 @@
 // import { Container, getRandom, getContainer } from '@cloudflare/containers'; // in a real Worker
-import { Container, getRandom, getContainer } from '../../src/index.js';
+import { Container, getRandom, getContainer, OnActivityExpiredResponse } from '../../src/index';
 
 export class MyContainer extends Container {
   defaultPort = 8080; // The default port for the container to listen on
@@ -20,6 +20,14 @@ export class MyContainer extends Container {
   override onError(error: unknown) {
     console.log('Container error:', error);
   }
+
+  public onActivityExpired(): OnActivityExpiredResponse {
+    console.log(
+      'Container activity expired, returning SIGTERM to allow the container to be stopped'
+    );
+
+    return { signal: 'SIGTERM' };
+  }
 }
 
 export default {
@@ -32,12 +40,12 @@ export default {
     // pass a unique container identifier to .get()
 
     if (pathname.startsWith('/container')) {
-      const containerInstance = getContainer(env.MY_CONTAINER, pathname)
+      const containerInstance = getContainer(env.MY_CONTAINER, pathname);
       return containerInstance.fetch(request);
     }
 
     if (pathname.startsWith('/error')) {
-      const containerInstance = getContainer(env.MY_CONTAINER, 'error-test')
+      const containerInstance = getContainer(env.MY_CONTAINER, 'error-test');
       return containerInstance.fetch(request);
     }
 

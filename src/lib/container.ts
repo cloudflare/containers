@@ -57,6 +57,18 @@ const FALLBACK_PORT_TO_CHECK = 33;
 // to be the only viable solution for now
 const TEMPORARY_HARDCODED_ATTEMPT_MAX = 6;
 
+export type Signal = 'SIGKILL' | 'SIGINT' | 'SIGTERM';
+export type SignalInteger = number;
+const signalToNumbers: Record<Signal, SignalInteger> = {
+  SIGINT: 2,
+  SIGTERM: 15,
+  SIGKILL: 9,
+};
+
+export type OnActivityExpiredResponse = {
+  signal: Signal | SignalInteger;
+};
+
 // =====================
 // =====================
 //   HELPER FUNCTIONS
@@ -127,34 +139,6 @@ function addTimeoutSignal(existingSignal: AbortSignal | undefined, timeoutMs: nu
   controller.signal.addEventListener('abort', () => clearTimeout(timeoutId));
 
   return controller.signal;
-}
-
-// ==== Stream helpers ====
-
-function attachOnClosedHook(stream: ReadableStream, onClosed: () => void): ReadableStream {
-  let destructor: (() => void) | null = () => {
-    onClosed();
-    destructor = null;
-  };
-
-  // we pass the readableStream through a transform stream to detect if the
-  // body has been closed.
-  const transformStream = new TransformStream({
-    transform(chunk, controller) {
-      controller.enqueue(chunk);
-    },
-    flush() {
-      if (destructor) {
-        destructor();
-      }
-    },
-    cancel() {
-      if (destructor) {
-        destructor();
-      }
-    },
-  });
-  return stream.pipeThrough(transformStream);
 }
 
 // ===============================
@@ -533,7 +517,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
    * Shuts down the container.
    * @param signal - The signal to send to the container (default: 15 for SIGTERM)
    */
-  public async stop(signal = 15): Promise<void> {
+  public async stop(signal: SignalInteger = signalToNumbers['SIGTERM']): Promise<void> {
     this.container.signal(signal);
   }
 
@@ -559,6 +543,25 @@ export class Container<Env = unknown> extends DurableObject<Env> {
    */
   public onStop(_: StopParams): void | Promise<void> {
     // Default implementation does nothing
+  }
+
+  /**
+   * Lifecycle method called when the container is running, and the activity timeout
+   * expiration has been reached.
+   *
+   * You can use this hook to communicate with the container
+   * to check if you want to shut it down.
+   *
+   * If you want to shutdown the container, you should return true. If you return false,
+   * the activity will be renewed.
+   *
+   * By default, this method returns true.
+   */
+  public onActivityExpired():
+    | null
+    | Promise<OnActivityExpiredResponse>
+    | OnActivityExpiredResponse {
+    return { signal: 'SIGTERM' };
   }
 
   /**
@@ -716,37 +719,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     try {
       // Renew the activity timeout whenever a request is proxied
       this.renewActivityTimeout();
-
-      if (request.body != null) {
-        this.openStreamCount++;
-        const destructor = () => {
-          this.openStreamCount--;
-          this.renewActivityTimeout();
-        };
-
-        const readable = attachOnClosedHook(request.body, destructor);
-        request = new Request(request, { body: readable });
-      }
-
       const res = await tcpPort.fetch(containerUrl, request);
-      if (res.webSocket) {
-        this.openStreamCount++;
-        // TODO: This does not seem to work :(
-        res.webSocket.addEventListener('close', async () => {
-          this.openStreamCount--;
-          this.renewActivityTimeout();
-        });
-      } else if (res.body != null) {
-        this.openStreamCount++;
-        const destructor = () => {
-          this.openStreamCount--;
-          this.renewActivityTimeout();
-        };
-
-        const readable = attachOnClosedHook(res.body, destructor);
-        return new Response(readable, res);
-      }
-
       return res;
     } catch (e) {
       if (!(e instanceof Error)) {
@@ -802,8 +775,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   private monitor: Promise<unknown> | undefined;
 
   private monitorSetup = false;
-  // openStreamCount keeps track of the number of open streams to the container
-  private openStreamCount = 0;
 
   private sleepAfterMs = 0;
 
@@ -1128,7 +1099,11 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     }
 
     if (this.isActivityExpired()) {
-      await this.stopDueToInactivity();
+      const stopped = await this.stopDueToInactivity();
+      if (!stopped) {
+        this.renewActivityTimeout();
+      }
+
       await this.ctx.storage.sync();
       return;
     }
@@ -1249,14 +1224,24 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   /**
    * Method called by scheduled task to stop the container due to inactivity
    */
-  private async stopDueToInactivity(): Promise<void> {
+  private async stopDueToInactivity(): Promise<boolean> {
     const alreadyStopped = !this.container.running;
-    const hasOpenStream = this.openStreamCount > 0;
 
-    if (alreadyStopped || hasOpenStream) {
-      return;
+    if (alreadyStopped) {
+      return false;
     }
 
-    await this.stop();
+    const shouldStop = await this.onActivityExpired();
+    if (!shouldStop) {
+      return false;
+    }
+
+    const signal =
+      typeof shouldStop.signal === 'string'
+        ? signalToNumbers[shouldStop.signal]
+        : shouldStop.signal;
+
+    await this.stop(signal);
+    return true;
   }
 }
