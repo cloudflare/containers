@@ -475,7 +475,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
             if (i === triesLeft - 1) {
               try {
                 // TODO: Remove attempts, the end user doesn't care about this
-                this.onError(
+                await this.onError(
                   `Failed to verify port ${port} is available after ${options.retries} attempts, last error: ${errorMessage}`
                 );
               } catch {}
@@ -517,8 +517,8 @@ export class Container<Env = unknown> extends DurableObject<Env> {
    * Shuts down the container.
    * @param signal - The signal to send to the container (default: 15 for SIGTERM)
    */
-  public async stop(signal: SignalInteger = signalToNumbers['SIGTERM']): Promise<void> {
-    this.container.signal(signal);
+  public async stop(signal: Signal | SignalInteger = 'SIGTERM'): Promise<void> {
+    this.container.signal(typeof signal === 'string' ? signalToNumbers[signal] : signal);
   }
 
   /**
@@ -559,6 +559,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
    */
   public onActivityExpired():
     | null
+    | Promise<null>
     | Promise<OnActivityExpiredResponse>
     | OnActivityExpiredResponse {
     return { signal: 'SIGTERM' };
@@ -805,16 +806,11 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     ...values: (string | number | boolean | null)[]
   ) {
     let query = '';
-    try {
-      // Construct the SQL query with placeholders
-      query = strings.reduce((acc, str, i) => acc + str + (i < values.length ? '?' : ''), '');
+    // Construct the SQL query with placeholders
+    query = strings.reduce((acc, str, i) => acc + str + (i < values.length ? '?' : ''), '');
 
-      // Execute the SQL query with the provided values
-      return [...this.ctx.storage.sql.exec(query, ...values)] as T[];
-    } catch (e) {
-      console.error(`Failed to execute SQL query: ${query}`, e);
-      throw this.onError(e);
-    }
+    // Execute the SQL query with the provided values
+    return [...this.ctx.storage.sql.exec(query, ...values)] as T[];
   }
 
   private requestAndPortFromContainerFetchArgs(
@@ -909,6 +905,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
           try {
             await this.onError(toThrow);
           } catch {}
+
           throw toThrow;
         } else if (!isNoInstanceError(err)) {
           try {
@@ -1116,7 +1113,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     // await a sleep for maxTime to keep the DO alive for
     // at least this long
     await new Promise<void>(resolve => {
-      setTimeout(() => {
+      this.timeout = setTimeout(() => {
         resolve();
       }, timeout);
     });
@@ -1124,6 +1121,8 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     // we exit and we have another alarm,
     // the next alarm is the one that decides if it should stop the loop.
   }
+
+  timeout?: ReturnType<typeof setTimeout>;
 
   // synchronises container state with the container source of truth to process events
   private async syncPendingStoppedEvents() {
@@ -1159,14 +1158,17 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
   /**
    * Schedule the next alarm based on upcoming tasks
-   * @private
    */
-  private async scheduleNextAlarm(ms = 1000): Promise<void> {
+  public async scheduleNextAlarm(ms = 1000): Promise<void> {
     const existingAlarm = await this.ctx.storage.getAlarm();
     const nextTime = ms + Date.now();
 
     // if not already set
     if (existingAlarm === null || existingAlarm > nextTime || existingAlarm < Date.now()) {
+      if (this.timeout) {
+        clearTimeout(this.timeout);
+      }
+
       await this.ctx.storage.setAlarm(nextTime);
       await this.ctx.storage.sync();
     }

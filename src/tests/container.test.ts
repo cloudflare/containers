@@ -8,9 +8,13 @@ import { getRandom } from '../lib/utils';
 jest.mock('node:async_hooks', () => {
   return {
     AsyncLocalStorage: class MockAsyncLocalStorage {
-      getStore() { return null; }
-      run(store: any, fn: Function) { return fn(); }
-    }
+      getStore() {
+        return null;
+      }
+      run(store: any, fn: Function) {
+        return fn();
+      }
+    },
   };
 });
 
@@ -41,10 +45,10 @@ describe('Container', () => {
     mockCtx = {
       storage: {
         sql: {
-          exec: jest.fn().mockReturnValue([])
-        }
+          exec: jest.fn().mockReturnValue([]),
+        },
       },
-      blockConcurrencyWhile: jest.fn((fn) => fn()),
+      blockConcurrencyWhile: jest.fn(fn => fn()),
       container: {
         running: false,
         start: jest.fn(),
@@ -58,18 +62,18 @@ describe('Container', () => {
               const mockWs = new (jest.requireMock('partyserver').MockWebSocket)();
               return Promise.resolve({
                 status: 101,
-                webSocket: mockWs
+                webSocket: mockWs,
               });
             }
 
             // Regular HTTP response
             return Promise.resolve({
               status: 200,
-              body: 'test'
+              body: 'test',
             });
-          })
-        })
-      }
+          }),
+        }),
+      },
     };
 
     // Create a container instance with the mock context
@@ -84,7 +88,6 @@ describe('Container', () => {
   test('should initialize with default values', () => {
     expect(container.defaultPort).toBe(8080);
     expect(container.sleepAfter).toBe('5m');
-    expect(container.manualStart).toBe(false);
   });
 
   test('startAndWaitForPorts should start container if not running (single port)', async () => {
@@ -143,10 +146,10 @@ describe('Container', () => {
   test('startAndWaitForPort (legacy) should call startAndWaitForPorts', async () => {
     // Create spy on startAndWaitForPorts
     const spy = jest.spyOn(container, 'startAndWaitForPorts');
-    
+
     // Call the legacy method
     await container.startAndWaitForPort(8080);
-    
+
     // Verify it called startAndWaitForPorts with the same parameters
     expect(spy).toHaveBeenCalledWith(8080, 10);
   });
@@ -155,8 +158,8 @@ describe('Container', () => {
     const mockRequest = new Request('https://example.com/test?query=value', {
       method: 'GET',
       headers: new Headers({
-        'Content-Type': 'application/json'
-      })
+        'Content-Type': 'application/json',
+      }),
     });
 
     // Make mockCtx.container.running true for this test
@@ -192,7 +195,7 @@ describe('Container', () => {
     await expect(async () => {
       // @ts-ignore - ignore TypeScript errors for testing
       await containerWithoutPort.containerFetch(mockRequest);
-    }).rejects.toThrow("No port specified for container fetch");
+    }).rejects.toThrow('No port specified for container fetch');
   });
 
   test('stop should destroy container if running', async () => {
@@ -244,9 +247,9 @@ describe('Container', () => {
     // Mock WebSocket upgrade request
     const mockRequest = new Request('https://example.com/ws', {
       headers: new Headers({
-        'Upgrade': 'websocket',
-        'Connection': 'Upgrade'
-      })
+        Upgrade: 'websocket',
+        Connection: 'Upgrade',
+      }),
     });
 
     // Ensure container is running
@@ -264,8 +267,8 @@ describe('Container', () => {
       expect.any(String),
       expect.objectContaining({
         headers: expect.objectContaining({
-          'Upgrade': 'websocket'
-        })
+          Upgrade: 'websocket',
+        }),
       })
     );
   });
@@ -278,9 +281,9 @@ describe('Container', () => {
     // Mock WebSocket upgrade request
     const mockRequest = new Request('https://example.com/ws', {
       headers: new Headers({
-        'Upgrade': 'websocket',
-        'Connection': 'Upgrade'
-      })
+        Upgrade: 'websocket',
+        Connection: 'Upgrade',
+      }),
     });
 
     // Ensure container is running
@@ -300,7 +303,7 @@ describe('getRandom', () => {
   test('should return a container stub', async () => {
     const mockBinding = {
       idFromString: jest.fn().mockReturnValue('mock-id'),
-      get: jest.fn().mockReturnValue({ mockStub: true })
+      get: jest.fn().mockReturnValue({ mockStub: true }),
     };
 
     const result = await getRandom(mockBinding as any, 5);
