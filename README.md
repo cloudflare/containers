@@ -88,10 +88,10 @@ All lifecycle methods can be implemented as async if needed.
 - `onStart()`: Called when container starts successfully - override to add custom behavior
 - `onStop()`: Called when container shuts down - override to add custom behavior
 - `onError(error)`: Called when container encounters an error - override to add custom behavior
-- `onActivityExpired(): { signal: number | string } | null`: Called when the activity is expired - override to add custom behavior, like communicating with the container to see if it should be shutdown.
+- `onActivityExpired()`: Called when the activity is expired - override to add custom behavior, like communicating with the container to see if it should be shutdown.
 
-By default, it returns `{ signal: "SIGTERM" }`.
-Return null if you want the activity to be renewed.
+By default, it calls `ctx.container.destroy()`.
+If you don't stop the container here, it will just renew the activity. It will be called again once it expires.
 
 ##### Container Methods
 
@@ -135,6 +135,8 @@ export class MyContainer extends Container {
   // Lifecycle method called when container shuts down
   override onStop(): void {
     console.log('Container stopped!');
+    // you can also call startAndWaitForPorts() again
+    //   this.startAndWaitForPorts();
   }
 
   // Lifecycle method called on errors
@@ -144,12 +146,11 @@ export class MyContainer extends Container {
   }
 
   // Lifecycle method when the container class considers the activity to be expired
-  override onActivityExpired(): OnActivityExpiredResponse | null {
+  override onActivityExpired() {
     console.log(
-      'Container activity expired, returning SIGTERM to allow the container to be stopped'
+      'Container activity expired'
     );
-
-    return { signal: 'SIGTERM' };
+    await this.destroy();
   }
 
   // Custom method that will extend the container's lifetime

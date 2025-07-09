@@ -65,10 +65,6 @@ const signalToNumbers: Record<Signal, SignalInteger> = {
   SIGKILL: 9,
 };
 
-export type OnActivityExpiredResponse = {
-  signal: Signal | SignalInteger;
-};
-
 // =====================
 // =====================
 //   HELPER FUNCTIONS
