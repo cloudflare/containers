@@ -27,7 +27,7 @@ const CONTAINER_STATE_KEY = '__CF_CONTAINER_STATE';
 // maxRetries before scheduling next alarm is purposely set to 3,
 // as according to DO docs at https://developers.cloudflare.com/durable-objects/api/alarms/
 // the maximum amount for alarm retries is 6.
-const MAX_ALAEM_RETRIES = 3;
+const MAX_ALARM_RETRIES = 3;
 const PING_TIMEOUT_MS = 5000;
 
 const DEFAULT_SLEEP_AFTER = '10m'; // Default sleep after inactivity time
@@ -549,20 +549,12 @@ export class Container<Env = unknown> extends DurableObject<Env> {
    * Lifecycle method called when the container is running, and the activity timeout
    * expiration has been reached.
    *
-   * You can use this hook to communicate with the container
-   * to check if you want to shut it down.
+   * If you want to shutdown the container, you should call this.destroy() here
    *
-   * If you want to shutdown the container, you should return true. If you return false,
-   * the activity will be renewed.
-   *
-   * By default, this method returns true.
+   * By default, this method calls `this.destroy()`
    */
-  public onActivityExpired():
-    | null
-    | Promise<null>
-    | Promise<OnActivityExpiredResponse>
-    | OnActivityExpiredResponse {
-    return { signal: 'SIGTERM' };
+  public async onActivityExpired(): Promise<void> {
+    await this.destroy();
   }
 
   /**
@@ -1015,6 +1007,13 @@ export class Container<Env = unknown> extends DurableObject<Env> {
           // TODO: Be able to retrigger onError
           await this.onError(error);
         } catch {}
+      })
+      .finally(() => {
+        this.monitorSetup = false;
+        if (this.timeout) {
+          if (this.resolve) this.resolve();
+          clearTimeout(this.timeout);
+        }
       });
   }
 
@@ -1032,7 +1031,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
    */
 
   override async alarm(alarmProps: { isRetry: boolean; retryCount: number }): Promise<void> {
-    if (alarmProps.isRetry && alarmProps.retryCount > MAX_ALAEM_RETRIES) {
+    if (alarmProps.isRetry && alarmProps.retryCount > MAX_ALARM_RETRIES) {
       const scheduleCount =
         Number(this.sql`SELECT COUNT(*) as count FROM container_schedules`[0]?.count) || 0;
       const hasScheduledTasks = scheduleCount > 0;
@@ -1102,12 +1101,9 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     }
 
     if (this.isActivityExpired()) {
-      const stopped = await this.stopDueToInactivity();
-      if (!stopped) {
-        this.renewActivityTimeout();
-      }
-
-      await this.ctx.storage.sync();
+      await this.stopDueToInactivity();
+      // renewActivityTimeout makes sure we don't spam calls here
+      this.renewActivityTimeout();
       return;
     }
 
@@ -1124,16 +1120,25 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     // await a sleep for maxTime to keep the DO alive for
     // at least this long
     await new Promise<void>(resolve => {
+      this.resolve = resolve;
+      if (!this.container.running) {
+        resolve();
+        return;
+      }
+
       this.timeout = setTimeout(() => {
         resolve();
       }, timeout);
     });
+
+    await this.ctx.storage.setAlarm(Date.now());
 
     // we exit and we have another alarm,
     // the next alarm is the one that decides if it should stop the loop.
   }
 
   timeout?: ReturnType<typeof setTimeout>;
+  resolve?: () => void;
 
   // synchronises container state with the container source of truth to process events
   private async syncPendingStoppedEvents() {
@@ -1175,6 +1180,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
     // if not already set
     if (this.timeout) {
+      if (this.resolve) this.resolve();
       clearTimeout(this.timeout);
     }
 
@@ -1256,17 +1262,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       return false;
     }
 
-    const shouldStop = await this.onActivityExpired();
-    if (!shouldStop) {
-      return false;
-    }
-
-    const signal =
-      typeof shouldStop.signal === 'string'
-        ? signalToNumbers[shouldStop.signal]
-        : shouldStop.signal;
-
-    await this.stop(signal);
-    return true;
+    await this.onActivityExpired();
   }
 }
