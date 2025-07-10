@@ -20,15 +20,15 @@ import { DurableObject } from 'cloudflare:workers';
 const NO_CONTAINER_INSTANCE_ERROR =
   'there is no container instance that can be provided to this durable object';
 const RUNTIME_SIGNALLED_ERROR = 'runtime signalled the container to exit:';
-const UNEXPECTED_EDIT_ERROR = 'container exited with unexpected exit code:';
+const UNEXPECTED_EXIT_ERROR = 'container exited with unexpected exit code:';
 const NOT_LISTENING_ERROR = 'the container is not listening';
 const CONTAINER_STATE_KEY = '__CF_CONTAINER_STATE';
 
 // maxRetries before scheduling next alarm is purposely set to 3,
 // as according to DO docs at https://developers.cloudflare.com/durable-objects/api/alarms/
 // the maximum amount for alarm retries is 6.
-const MAX_ALAEM_RETRIES = 3;
-const PING_TIMEOUT_MS = 1500;
+const MAX_ALARM_RETRIES = 3;
+const PING_TIMEOUT_MS = 5000;
 
 const DEFAULT_SLEEP_AFTER = '10m'; // Default sleep after inactivity time
 const INSTANCE_POLL_INTERVAL_MS = 300; // Default interval for polling container state
@@ -57,6 +57,14 @@ const FALLBACK_PORT_TO_CHECK = 33;
 // to be the only viable solution for now
 const TEMPORARY_HARDCODED_ATTEMPT_MAX = 6;
 
+export type Signal = 'SIGKILL' | 'SIGINT' | 'SIGTERM';
+export type SignalInteger = number;
+const signalToNumbers: Record<Signal, SignalInteger> = {
+  SIGINT: 2,
+  SIGTERM: 15,
+  SIGKILL: 9,
+};
+
 // =====================
 // =====================
 //   HELPER FUNCTIONS
@@ -76,7 +84,7 @@ const isRuntimeSignalledError = (error: unknown): boolean =>
   isErrorOfType(error, RUNTIME_SIGNALLED_ERROR);
 const isNotListeningError = (error: unknown): boolean => isErrorOfType(error, NOT_LISTENING_ERROR);
 const isContainerExitNonZeroError = (error: unknown): boolean =>
-  isErrorOfType(error, UNEXPECTED_EDIT_ERROR);
+  isErrorOfType(error, UNEXPECTED_EXIT_ERROR);
 
 function getExitCodeFromError(error: unknown): number | null {
   if (!(error instanceof Error)) {
@@ -97,8 +105,8 @@ function getExitCodeFromError(error: unknown): number | null {
     return +error.message
       .toLowerCase()
       .slice(
-        error.message.toLowerCase().indexOf(UNEXPECTED_EDIT_ERROR) +
-          UNEXPECTED_EDIT_ERROR.length +
+        error.message.toLowerCase().indexOf(UNEXPECTED_EXIT_ERROR) +
+          UNEXPECTED_EXIT_ERROR.length +
           1
       );
   }
@@ -127,34 +135,6 @@ function addTimeoutSignal(existingSignal: AbortSignal | undefined, timeoutMs: nu
   controller.signal.addEventListener('abort', () => clearTimeout(timeoutId));
 
   return controller.signal;
-}
-
-// ==== Stream helpers ====
-
-function attachOnClosedHook(stream: ReadableStream, onClosed: () => void): ReadableStream {
-  let destructor: (() => void) | null = () => {
-    onClosed();
-    destructor = null;
-  };
-
-  // we pass the readableStream through a transform stream to detect if the
-  // body has been closed.
-  const transformStream = new TransformStream({
-    transform(chunk, controller) {
-      controller.enqueue(chunk);
-    },
-    flush() {
-      if (destructor) {
-        destructor();
-      }
-    },
-    cancel() {
-      if (destructor) {
-        destructor();
-      }
-    },
-  });
-  return stream.pipeThrough(transformStream);
 }
 
 // ===============================
@@ -491,7 +471,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
             if (i === triesLeft - 1) {
               try {
                 // TODO: Remove attempts, the end user doesn't care about this
-                this.onError(
+                await this.onError(
                   `Failed to verify port ${port} is available after ${options.retries} attempts, last error: ${errorMessage}`
                 );
               } catch {}
@@ -533,8 +513,8 @@ export class Container<Env = unknown> extends DurableObject<Env> {
    * Shuts down the container.
    * @param signal - The signal to send to the container (default: 15 for SIGTERM)
    */
-  public async stop(signal = 15): Promise<void> {
-    this.container.signal(signal);
+  public async stop(signal: Signal | SignalInteger = 'SIGTERM'): Promise<void> {
+    this.container.signal(typeof signal === 'string' ? signalToNumbers[signal] : signal);
   }
 
   /**
@@ -559,6 +539,18 @@ export class Container<Env = unknown> extends DurableObject<Env> {
    */
   public onStop(_: StopParams): void | Promise<void> {
     // Default implementation does nothing
+  }
+
+  /**
+   * Lifecycle method called when the container is running, and the activity timeout
+   * expiration has been reached.
+   *
+   * If you want to shutdown the container, you should call this.destroy() here
+   *
+   * By default, this method calls `this.destroy()`
+   */
+  public async onActivityExpired(): Promise<void> {
+    await this.stop();
   }
 
   /**
@@ -716,37 +708,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     try {
       // Renew the activity timeout whenever a request is proxied
       this.renewActivityTimeout();
-
-      if (request.body != null) {
-        this.openStreamCount++;
-        const destructor = () => {
-          this.openStreamCount--;
-          this.renewActivityTimeout();
-        };
-
-        const readable = attachOnClosedHook(request.body, destructor);
-        request = new Request(request, { body: readable });
-      }
-
       const res = await tcpPort.fetch(containerUrl, request);
-      if (res.webSocket) {
-        this.openStreamCount++;
-        // TODO: This does not seem to work :(
-        res.webSocket.addEventListener('close', async () => {
-          this.openStreamCount--;
-          this.renewActivityTimeout();
-        });
-      } else if (res.body != null) {
-        this.openStreamCount++;
-        const destructor = () => {
-          this.openStreamCount--;
-          this.renewActivityTimeout();
-        };
-
-        const readable = attachOnClosedHook(res.body, destructor);
-        return new Response(readable, res);
-      }
-
       return res;
     } catch (e) {
       if (!(e instanceof Error)) {
@@ -802,8 +764,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   private monitor: Promise<unknown> | undefined;
 
   private monitorSetup = false;
-  // openStreamCount keeps track of the number of open streams to the container
-  private openStreamCount = 0;
 
   private sleepAfterMs = 0;
 
@@ -834,16 +794,11 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     ...values: (string | number | boolean | null)[]
   ) {
     let query = '';
-    try {
-      // Construct the SQL query with placeholders
-      query = strings.reduce((acc, str, i) => acc + str + (i < values.length ? '?' : ''), '');
+    // Construct the SQL query with placeholders
+    query = strings.reduce((acc, str, i) => acc + str + (i < values.length ? '?' : ''), '');
 
-      // Execute the SQL query with the provided values
-      return [...this.ctx.storage.sql.exec(query, ...values)] as T[];
-    } catch (e) {
-      console.error(`Failed to execute SQL query: ${query}`, e);
-      throw this.onError(e);
-    }
+    // Execute the SQL query with the provided values
+    return [...this.ctx.storage.sql.exec(query, ...values)] as T[];
   }
 
   private requestAndPortFromContainerFetchArgs(
@@ -938,6 +893,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
           try {
             await this.onError(toThrow);
           } catch {}
+
           throw toThrow;
         } else if (!isNoInstanceError(err)) {
           try {
@@ -1040,13 +996,25 @@ export class Container<Env = unknown> extends DurableObject<Env> {
           await this.state.setStoppedWithCode(exitCode);
           this.monitorSetup = false;
           this.monitor = undefined;
+          return;
         }
 
         try {
           // TODO: Be able to retrigger onError
           await this.onError(error);
         } catch {}
+      })
+      .finally(() => {
+        this.monitorSetup = false;
+        if (this.timeout) {
+          if (this.resolve) this.resolve();
+          clearTimeout(this.timeout);
+        }
       });
+  }
+
+  deleteSchedules(name: string) {
+    this.sql`DELETE FROM container_schedules WHERE callback = ${name}`;
   }
 
   // ============================
@@ -1059,7 +1027,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
    */
 
   override async alarm(alarmProps: { isRetry: boolean; retryCount: number }): Promise<void> {
-    if (alarmProps.isRetry && alarmProps.retryCount > MAX_ALAEM_RETRIES) {
+    if (alarmProps.isRetry && alarmProps.retryCount > MAX_ALARM_RETRIES) {
       const scheduleCount =
         Number(this.sql`SELECT COUNT(*) as count FROM container_schedules`[0]?.count) || 0;
       const hasScheduledTasks = scheduleCount > 0;
@@ -1073,7 +1041,8 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     // The only way for this DO to stop having alarms is:
     //  1. The container is not running anymore.
     //  2. Activity expired and it exits.
-    await this.ctx.storage.setAlarm(Date.now() + 1000);
+    const prevAlarm = Date.now();
+    await this.ctx.storage.setAlarm(prevAlarm);
     await this.ctx.storage.sync();
 
     const now = Math.floor(Date.now() / 1000);
@@ -1087,12 +1056,12 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     }>`
          SELECT * FROM container_schedules;
        `;
-    let maxTime = 0;
+    let minTime = Date.now() + 3 * 60 * 1000;
 
     // Process each due schedule
     for (const row of result) {
       if (row.time > now) {
-        maxTime = Math.max(maxTime, row.time * 1000);
+        minTime = Math.min(minTime, row.time * 1000);
         continue;
       }
 
@@ -1129,26 +1098,43 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
     if (this.isActivityExpired()) {
       await this.stopDueToInactivity();
-      await this.ctx.storage.sync();
+      // renewActivityTimeout makes sure we don't spam calls here
+      this.renewActivityTimeout();
+      return;
+    }
+
+    const alarmNow = await this.ctx.storage.getAlarm();
+    if (alarmNow !== prevAlarm) {
+      await this.ctx.storage.setAlarm(Date.now());
       return;
     }
 
     // Math.min(3m or maxTime, sleepTimeout)
-    maxTime = maxTime === 0 ? Date.now() + 60 * 3 * 1000 : maxTime;
-    maxTime = Math.min(maxTime, this.sleepAfterMs);
-    const timeout = Math.max(0, maxTime - Date.now());
+    minTime = Math.min(minTime, this.sleepAfterMs);
+    const timeout = Math.max(0, minTime - Date.now());
 
     // await a sleep for maxTime to keep the DO alive for
     // at least this long
     await new Promise<void>(resolve => {
-      setTimeout(() => {
+      this.resolve = resolve;
+      if (!this.container.running) {
+        resolve();
+        return;
+      }
+
+      this.timeout = setTimeout(() => {
         resolve();
       }, timeout);
     });
 
+    await this.ctx.storage.setAlarm(Date.now());
+
     // we exit and we have another alarm,
     // the next alarm is the one that decides if it should stop the loop.
   }
+
+  timeout?: ReturnType<typeof setTimeout>;
+  resolve?: () => void;
 
   // synchronises container state with the container source of truth to process events
   private async syncPendingStoppedEvents() {
@@ -1184,41 +1170,38 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
   /**
    * Schedule the next alarm based on upcoming tasks
-   * @private
    */
-  private async scheduleNextAlarm(ms = 1000): Promise<void> {
-    const existingAlarm = await this.ctx.storage.getAlarm();
+  public async scheduleNextAlarm(ms = 1000): Promise<void> {
     const nextTime = ms + Date.now();
 
     // if not already set
-    if (existingAlarm === null || existingAlarm > nextTime || existingAlarm < Date.now()) {
-      await this.ctx.storage.setAlarm(nextTime);
-      await this.ctx.storage.sync();
+    if (this.timeout) {
+      if (this.resolve) this.resolve();
+      clearTimeout(this.timeout);
     }
+
+    await this.ctx.storage.setAlarm(nextTime);
+    await this.ctx.storage.sync();
   }
 
-  /**
-   * Get a scheduled task by ID
-   * @template T Type of the payload data
-   * @param id ID of the scheduled task
-   * @returns The Schedule object or undefined if not found
-   */
-  async getSchedule<T = string>(id: string): Promise<Schedule<T> | undefined> {
+  async listSchedules<T = string>(name: string): Promise<Schedule<T>[]> {
     const result = this.sql<ScheduleSQL>`
-      SELECT * FROM container_schedules WHERE id = ${id} LIMIT 1
+      SELECT * FROM container_schedules WHERE callback = ${name} LIMIT 1
     `;
 
     if (!result || result.length === 0) {
-      return undefined;
+      return [];
     }
 
-    const schedule = result[0];
-    let payload: T;
+    return result.map(this.toSchedule<T>);
+  }
 
+  private toSchedule<T = string>(schedule: ScheduleSQL): Schedule<T> {
+    let payload: T;
     try {
       payload = JSON.parse(schedule.payload) as T;
     } catch (e) {
-      console.error(`Error parsing payload for schedule ${id}:`, e);
+      console.error(`Error parsing payload for schedule ${schedule.id}:`, e);
       payload = undefined as unknown as T;
     }
 
@@ -1242,6 +1225,25 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     };
   }
 
+  /**
+   * Get a scheduled task by ID
+   * @template T Type of the payload data
+   * @param id ID of the scheduled task
+   * @returns The Schedule object or undefined if not found
+   */
+  async getSchedule<T = string>(id: string): Promise<Schedule<T> | undefined> {
+    const result = this.sql<ScheduleSQL>`
+      SELECT * FROM container_schedules WHERE id = ${id} LIMIT 1
+    `;
+
+    if (!result || result.length === 0) {
+      return undefined;
+    }
+
+    const schedule = result[0];
+    return this.toSchedule(schedule);
+  }
+
   private isActivityExpired(): boolean {
     return this.sleepAfterMs <= Date.now();
   }
@@ -1249,14 +1251,14 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   /**
    * Method called by scheduled task to stop the container due to inactivity
    */
-  private async stopDueToInactivity(): Promise<void> {
+  private async stopDueToInactivity(): Promise<boolean> {
     const alreadyStopped = !this.container.running;
-    const hasOpenStream = this.openStreamCount > 0;
 
-    if (alreadyStopped || hasOpenStream) {
-      return;
+    if (alreadyStopped) {
+      return false;
     }
 
-    await this.stop();
+    await this.onActivityExpired();
+    return true;
   }
 }

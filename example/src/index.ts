@@ -32,12 +32,12 @@ export default {
     // pass a unique container identifier to .get()
 
     if (pathname.startsWith('/container')) {
-      const containerInstance = getContainer(env.MY_CONTAINER, pathname)
+      const containerInstance = getContainer(env.MY_CONTAINER, pathname);
       return containerInstance.fetch(request);
     }
 
     if (pathname.startsWith('/error')) {
-      const containerInstance = getContainer(env.MY_CONTAINER, 'error-test')
+      const containerInstance = getContainer(env.MY_CONTAINER, 'error-test');
       return containerInstance.fetch(request);
     }
 
