@@ -91,7 +91,7 @@ All lifecycle methods can be implemented as async if needed.
 - `onActivityExpired()`: Called when the activity is expired - override to add custom behavior, like communicating with the container to see if it should be shutdown.
 
 By default, it calls `ctx.container.destroy()`.
-If you don't stop the container here, it will just renew the activity. It will be called again once it expires.
+If you don't stop the container here, the activity tracker will be renewed, and this lifecycle hook will be called again when the timer re-expires.
 
 ##### Container Methods
 
@@ -106,7 +106,7 @@ If you don't stop the container here, it will just renew the activity. It will b
 - `stop(signal = SIGTERM)`: Sends the specified signal to the container.
 - `renewActivityTimeout()`: Manually renews the container activity timeout (extends container lifetime)
 - `stopDueToInactivity()`: Called automatically when the container times out due to inactivity
-- `alarm()`: Default alarm handler. It's in charge of renewing the container activity and keeping the durable object alive. You can override, but we recommend calling `schedule` to schedule tasks in the durable object.
+- `alarm()`: Default alarm handler. It's in charge of renewing the container activity and keeping the durable object alive. You can override `alarm()`, but because its functionality is currently vital to managing the container lifecycle, we recommend calling `schedule` to schedule tasks instead.
 
 ### Utility Functions
 
