@@ -550,7 +550,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
    * By default, this method calls `this.destroy()`
    */
   public async onActivityExpired(): Promise<void> {
-    await this.destroy();
+    await this.stop();
   }
 
   /**
@@ -1259,5 +1259,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     }
 
     await this.onActivityExpired();
+    return true;
   }
 }

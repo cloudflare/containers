@@ -104,6 +104,7 @@ If you don't stop the container here, the activity tracker will be renewed, and 
 - `start()`: Starts the container if it's not running and sets up monitoring, without waiting for any ports to be ready.
 - `startAndWaitForPorts(ports?, maxTries?)`: Starts the container using `start()` and then waits for specified ports to be ready. If no ports are specified, uses `requiredPorts` or `defaultPort`. If no ports can be determined, just starts the container without port checks.
 - `stop(signal = SIGTERM)`: Sends the specified signal to the container.
+- `destroy()`: Forcefully destroys the container.
 - `renewActivityTimeout()`: Manually renews the container activity timeout (extends container lifetime)
 - `stopDueToInactivity()`: Called automatically when the container times out due to inactivity
 - `alarm()`: Default alarm handler. It's in charge of renewing the container activity and keeping the durable object alive. You can override `alarm()`, but because its functionality is currently vital to managing the container lifecycle, we recommend calling `schedule` to schedule tasks instead.
