@@ -735,15 +735,14 @@ export class Container<Env = unknown> extends DurableObject<Env> {
    * @param request The request to handle
    */
   override async fetch(request: Request): Promise<Response> {
-    if (this.defaultPort === undefined) {
-      return new Response(
-        'No default port configured for this container. Override the fetch method or set defaultPort in your Container subclass.',
-        { status: 500 }
+    const url = new URL(request.url);
+    if (this.defaultPort === undefined && url.port === '') {
+      throw new Error(
+        'No port configured for this container. Set the defaultPort in your Container subclass, or set a port with switchPort.'
       );
     }
 
-    const url = new URL(request.url);
-    const portValue = url.port === '' ? this.defaultPort : +url.port;
+    const portValue = +(url.port === '' ? (this.defaultPort ?? '') : url.port);
     if (isNaN(portValue)) {
       throw new Error('port is not a number');
     }
