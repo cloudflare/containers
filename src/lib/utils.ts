@@ -33,7 +33,7 @@ export async function loadBalance<T extends Container>(
 ): Promise<DurableObjectStub<T>> {
   console.warn(
     'loadBalance is deprecated, please use getRandom instead. This will be removed in a future version.'
-  )
+  );
   return getRandom(binding, instances);
 }
 
@@ -50,4 +50,17 @@ export function getContainer<T extends Container>(
 ): DurableObjectStub<T> {
   const objectId = binding.idFromName(name ?? singletonContainerId);
   return binding.get(objectId);
+}
+
+/**
+ * Return a request with the port target set correctly
+ * You can use this method when you have to use `fetch` and not `containerFetch` with as it's a JSRPC method and it
+ * comes with some consequences like not being able to pass WebSockets.
+ *
+ * @example container.fetch(switchPort(request, 8090));
+ */
+export function switchPort(request: Request, port: number): Request {
+  const url = new URL(request.url);
+  url.port = `${port}`;
+  return new Request(url, request);
 }
