@@ -60,7 +60,7 @@ The main class that extends a container-enbled Durable Object to provide additio
 
 #### Properties
 
-- `defaultPort?`: Optional default port to use when communicating with the container. If not set, you must specify port in containerFetch calls
+- `defaultPort?`: Optional default port to use when communicating with the container. If not set, you must specify port in `containerFetch` calls, or use `switchPort`.
 - `requiredPorts?`: Array of ports that should be checked for availability during container startup. Used by startAndWaitForPorts when no specific ports are provided.
 - `sleepAfter`: How long to keep the container alive without activity (format: number for seconds, or string like "5m", "30s", "1h")
 - `env`: Environment variables to pass to the container (Record<string, string>)
@@ -101,6 +101,10 @@ If you don't stop the container here, the activity tracker will be renewed, and 
   - `containerFetch(url, init?, port?)`: Standard fetch-like signature with URL string/object and RequestInit options
   Either port parameter or defaultPort must be specified.
   When you call any of the fetch functions, the activity will be automatically renewed, and if the container will be started if not already running.
+  **Do not use 'containerFetch' when trying to send a Request object with a websocket, until [this issue is addressed](https://github.com/cloudflare/workerd/issues/2319).
+  You can overcome this limitation by doing:
+  `container.fetch(switchPort(request, port))`
+
 - `start()`: Starts the container if it's not running and sets up monitoring, without waiting for any ports to be ready.
 - `startAndWaitForPorts(ports?, maxTries?)`: Starts the container using `start()` and then waits for specified ports to be ready. If no ports are specified, uses `requiredPorts` or `defaultPort`. If no ports can be determined, just starts the container without port checks.
 - `stop(signal = SIGTERM)`: Sends the specified signal to the container.

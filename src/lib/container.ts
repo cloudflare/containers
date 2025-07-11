@@ -656,9 +656,8 @@ export class Container<Env = unknown> extends DurableObject<Env> {
    * Send a request to the container (HTTP or WebSocket) using standard fetch API signature
    * Based on containers-starter-go implementation
    *
-   * This method handles both HTTP and WebSocket requests to the container.
-   * For WebSocket requests, it sets up bidirectional message forwarding with proper
-   * activity timeout renewal.
+   * This method handles HTTP requests to the container. WebSocket requests done outside the DO*
+   * won't work until https://github.com/cloudflare/workerd/issues/2319 is addressed. Until then, please use `switchPort` + `fetch()`.
    *
    * Method supports multiple signatures to match standard fetch API:
    * - containerFetch(request: Request, port?: number)
@@ -736,15 +735,20 @@ export class Container<Env = unknown> extends DurableObject<Env> {
    * @param request The request to handle
    */
   override async fetch(request: Request): Promise<Response> {
-    if (this.defaultPort === undefined) {
-      return new Response(
-        'No default port configured for this container. Override the fetch method or set defaultPort in your Container subclass.',
-        { status: 500 }
+    const url = new URL(request.url);
+    if (this.defaultPort === undefined && url.port === '') {
+      throw new Error(
+        'No port configured for this container. Set the defaultPort in your Container subclass, or set a port with switchPort.'
       );
     }
 
+    const portValue = +(url.port === '' ? (this.defaultPort ?? '') : url.port);
+    if (isNaN(portValue)) {
+      throw new Error('port is not a number');
+    }
+
     // Forward all requests (HTTP and WebSocket) to the container
-    return await this.containerFetch(request, this.defaultPort);
+    return await this.containerFetch(request, portValue);
   }
 
   // ===============================
