@@ -285,7 +285,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
    * @returns Promise<State>
    */
   async getState(): Promise<State> {
-    return { ...this.state.getState() };
+    return { ...(await this.state.getState()) };
   }
 
   // ==========================
