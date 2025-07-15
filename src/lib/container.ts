@@ -280,6 +280,14 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     }
   }
 
+  /**
+   * Gets the current state of the container
+   * @returns Promise<State>
+   */
+  async getState(): Promise<State> {
+    return { ...this.state.getState() };
+  }
+
   // ==========================
   //     CONTAINER STARTING
   // ==========================
