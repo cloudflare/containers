@@ -391,7 +391,7 @@ export default {
 This package includes a `getContainer` helper which returns a container instance
 stub.
 
-The first arbument is the Container's Durable Object namespace. The second argument is
+The first argument is the Container's Durable Object namespace. The second argument is
 optional and is a "name" for the Durable Object. This will be used to generate an ID,
 then return a specific Container instance (Durable Object instance). If no second argument
 is given, the name "cf-singleton-container" is used.
