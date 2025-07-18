@@ -1057,7 +1057,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     await this.ctx.storage.setAlarm(prevAlarm);
     await this.ctx.storage.sync();
 
-    const now = Math.floor(Date.now() / 1000);
     // Get all schedules that should be executed now
     const result = this.sql<{
       id: string;
@@ -1072,11 +1071,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
     // Process each due schedule
     for (const row of result) {
-      if (row.time > now) {
-        minTime = Math.min(minTime, row.time * 1000);
-        continue;
-      }
-
       const callback = this[row.callback as keyof this];
       if (!callback || typeof callback !== 'function') {
         console.error(`Callback ${row.callback} not found or is not a function`);
@@ -1100,11 +1094,27 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       this.sql`DELETE FROM container_schedules WHERE id = ${row.id}`;
     }
 
+    const resultForMinTime = this.sql<{
+      id: string;
+      callback: string;
+      payload: string;
+      type: 'scheduled' | 'delayed';
+      time: number;
+    }>`
+         SELECT * FROM container_schedules;
+       `;
+    const minTimeFromSchedules = Math.min(...resultForMinTime.map(r => r.time * 1000));
+
     // if not running and nothing to do, stop
     if (!this.container.running) {
       await this.syncPendingStoppedEvents();
-      await this.ctx.storage.deleteAlarm();
-      await this.ctx.storage.sync();
+
+      if (resultForMinTime.length == 0) {
+        await this.ctx.storage.deleteAlarm();
+      } else {
+        await this.ctx.storage.setAlarm(minTimeFromSchedules);
+      }
+
       return;
     }
 
@@ -1115,14 +1125,8 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       return;
     }
 
-    const alarmNow = await this.ctx.storage.getAlarm();
-    if (alarmNow !== prevAlarm) {
-      await this.ctx.storage.setAlarm(Date.now());
-      return;
-    }
-
     // Math.min(3m or maxTime, sleepTimeout)
-    minTime = Math.min(minTime, this.sleepAfterMs);
+    minTime = Math.min(minTimeFromSchedules, minTime, this.sleepAfterMs);
     const timeout = Math.max(0, minTime - Date.now());
 
     // await a sleep for maxTime to keep the DO alive for
