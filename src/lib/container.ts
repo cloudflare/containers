@@ -1069,8 +1069,14 @@ export class Container<Env = unknown> extends DurableObject<Env> {
        `;
     let minTime = Date.now() + 3 * 60 * 1000;
 
+    const now = Date.now() / 1000;
     // Process each due schedule
     for (const row of result) {
+      // check if we need to run it
+      if (row.time > now) {
+        continue;
+      }
+
       const callback = this[row.callback as keyof this];
       if (!callback || typeof callback !== 'function') {
         console.error(`Callback ${row.callback} not found or is not a function`);
