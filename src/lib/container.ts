@@ -553,11 +553,15 @@ export class Container<Env = unknown> extends DurableObject<Env> {
    * Lifecycle method called when the container is running, and the activity timeout
    * expiration has been reached.
    *
-   * If you want to shutdown the container, you should call this.destroy() here
+   * If you want to shutdown the container, you should call this.stop() here
    *
-   * By default, this method calls `this.destroy()`
+   * By default, this method calls `this.stop()`
    */
   public async onActivityExpired(): Promise<void> {
+    if (!this.container.running) {
+      return;
+    }
+
     await this.stop();
   }
 
@@ -1125,7 +1129,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     }
 
     if (this.isActivityExpired()) {
-      await this.stopDueToInactivity();
+      await this.onActivityExpired();
       // renewActivityTimeout makes sure we don't spam calls here
       this.renewActivityTimeout();
       return;
@@ -1268,19 +1272,5 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
   private isActivityExpired(): boolean {
     return this.sleepAfterMs <= Date.now();
-  }
-
-  /**
-   * Method called by scheduled task to stop the container due to inactivity
-   */
-  private async stopDueToInactivity(): Promise<boolean> {
-    const alreadyStopped = !this.container.running;
-
-    if (alreadyStopped) {
-      return false;
-    }
-
-    await this.onActivityExpired();
-    return true;
   }
 }
