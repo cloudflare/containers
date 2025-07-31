@@ -238,6 +238,12 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   constructor(ctx: DurableObject['ctx'], env: Env, options?: ContainerOptions) {
     super(ctx, env);
 
+    if (ctx.container === undefined) {
+      throw new Error(
+        'Containers have not been enabled for this Durable Object class. Have you correctly setup your Wrangler config? More info: https://developers.cloudflare.com/containers/get-started/#configuration'
+      );
+    }
+
     this.state = new ContainerState(this.ctx.storage);
 
     this.ctx.blockConcurrencyWhile(async () => {
@@ -246,12 +252,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       // First thing, schedule the next alarms
       await this.scheduleNextAlarm();
     });
-
-    if (ctx.container === undefined) {
-      throw new Error(
-        'Container is not enabled for this durable object class. Have you correctly setup your wrangler.toml?'
-      );
-    }
 
     this.container = ctx.container;
 
