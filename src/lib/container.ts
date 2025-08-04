@@ -508,8 +508,8 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
     await this.ctx.blockConcurrencyWhile(async () => {
       // All ports are ready
-      await this.onStart();
       await this.state.setHealthy();
+      await this.onStart();
     });
   }
 
