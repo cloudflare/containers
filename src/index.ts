@@ -5,4 +5,7 @@ export type {
   ContainerEventHandler,
   ContainerMessage,
   ContainerStartConfigOptions,
+  StopParams,
+  WaitOptions,
+  State,
 } from './types';
