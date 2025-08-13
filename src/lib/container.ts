@@ -361,7 +361,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
   /**
    * Start the container and wait for ports to be available
-   * Based on containers-starter-go implementation
    *
    * This method builds on start() by adding port availability verification:
    * 1. Calls start() to ensure the container is running
@@ -376,7 +375,8 @@ export class Container<Env = unknown> extends DurableObject<Env> {
    * 3. defaultPort (if neither of the above is specified)
    *
    * @param ports - The ports to wait for (if undefined, uses requiredPorts or defaultPort)
-   * @param maxTries - Maximum number of attempts to connect to each port before failing
+   * @param cancellationOptions
+   * @param startOptions Override configuration on a per instance for env vars, entrypoint command and internet access
    * @throws Error if port checks fail after maxTries attempts
    */
   public async startAndWaitForPorts(
@@ -386,7 +386,8 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       instanceGetTimeoutMS?: number;
       portReadyTimeoutMS?: number;
       waitInterval?: number;
-    }
+    },
+    startOptions?: ContainerStartConfigOptions
   ): Promise<void> {
     // Determine which ports to check
     let portsToCheck: number[] = [];
@@ -426,7 +427,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     if (state.status === 'healthy' && this.container.running) {
       if (this.container.running && !this.monitor) {
         // This is needed to setup the monitoring
-        await this.startContainerIfNotRunning(options);
+        await this.startContainerIfNotRunning(options, startOptions);
         this.setupMonitorCallbacks();
       }
 
@@ -443,7 +444,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     });
 
     // Start the container if it's not running
-    const triesUsed = await this.startContainerIfNotRunning(options);
+    const triesUsed = await this.startContainerIfNotRunning(options, startOptions);
 
     const triesLeft = totalPortReadyTries - triesUsed;
     // Check each port
