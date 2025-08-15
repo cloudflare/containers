@@ -352,6 +352,9 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     );
 
     this.setupMonitorCallbacks();
+    await this.ctx.blockConcurrencyWhile(async () => {
+      await this.onStart();
+    });
   }
 
   /**
