@@ -786,21 +786,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   //     GENERAL HELPERS
   // ==========================
 
-  // This wraps blockConcurrencyWhile so you can throw in it,
-  // then check for a string return value that you can throw from the parent
-  // Note that the DO will continue to run, unlike normal errors in blockConcurrencyWhile
-  private async blockConcurrencyThrowable(
-    blockingFunction: () => Promise<any>
-  ): Promise<string | undefined> {
-    return this.ctx.blockConcurrencyWhile(async () => {
-      try {
-        return await blockingFunction();
-      } catch (e) {
-        return `${e instanceof Error ? e.message : String(e)}`;
-      }
-    });
-  }
-
   /**
    * Execute SQL queries against the Container's database
    */
