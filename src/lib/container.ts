@@ -978,6 +978,9 @@ export class Container<Env = unknown> extends DurableObject<Env> {
             //
             // Until we address this issue on the back-end CF side, we will need to abort the
             // durable object so it retries to reconnect from scratch.
+
+            console.log("I AM ABORTING BECAUSE Network connection lost")
+
             this.ctx.abort();
           }
 

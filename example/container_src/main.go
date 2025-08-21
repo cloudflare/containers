@@ -26,6 +26,8 @@ func errorHandler(w http.ResponseWriter, r *http.Request) {
 func main() {
 	stop := make(chan os.Signal, 1)
 
+	time.Sleep(5 * time.Second)
+
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 
 	router := http.NewServeMux()
