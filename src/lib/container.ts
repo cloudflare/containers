@@ -352,6 +352,8 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     );
 
     this.setupMonitorCallbacks();
+
+    // TODO: We should consider an onHealthy callback
     await this.ctx.blockConcurrencyWhile(async () => {
       await this.onStart();
     });
@@ -440,71 +442,65 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       });
     });
 
-    const errorFromBCW = await this.blockConcurrencyThrowable(async () => {
-      // Start the container if it's not running
-      const triesUsed = await this.startContainerIfNotRunning(options);
-      const triesLeft = totalPortReadyTries - triesUsed;
+    // Start the container if it's not running
+    const triesUsed = await this.startContainerIfNotRunning(options);
 
-      // Check each port
-      for (const port of portsToCheck) {
-        const tcpPort = this.container.getTcpPort(port);
-        let portReady = false;
+    const triesLeft = totalPortReadyTries - triesUsed;
+    // Check each port
+    for (const port of portsToCheck) {
+      const tcpPort = this.container.getTcpPort(port);
+      let portReady = false;
 
-        // Try to connect to the port multiple times
-        for (let i = 0; i < triesLeft && !portReady; i++) {
-          try {
-            const combinedSignal = addTimeoutSignal(options.abort, PING_TIMEOUT_MS);
-            await tcpPort.fetch('http://ping', { signal: combinedSignal });
+      // Try to connect to the port multiple times
+      for (let i = 0; i < triesLeft && !portReady; i++) {
+        try {
+          const combinedSignal = addTimeoutSignal(options.abort, PING_TIMEOUT_MS);
+          await tcpPort.fetch('http://ping', { signal: combinedSignal });
 
-            // Successfully connected to this port
-            portReady = true;
-            console.log(`Port ${port} is ready`);
-          } catch (e) {
-            // Check for specific error messages that indicate we should keep retrying
-            const errorMessage = e instanceof Error ? e.message : String(e);
+          // Successfully connected to this port
+          portReady = true;
+          console.log(`Port ${port} is ready`);
+        } catch (e) {
+          // Check for specific error messages that indicate we should keep retrying
+          const errorMessage = e instanceof Error ? e.message : String(e);
 
-            console.warn(`Error checking ${port}: ${errorMessage}`);
+          console.warn(`Error checking ${port}: ${errorMessage}`);
 
-            // If not running, it means the container crashed
-            if (!this.container.running) {
-              try {
-                await this.onError(
-                  new Error(
-                    `Container crashed while checking for ports, did you setup the entrypoint correctly?`
-                  )
-                );
-              } catch {}
+          // If not running, it means the container crashed
+          if (!this.container.running) {
+            try {
+              await this.onError(
+                new Error(
+                  `Container crashed while checking for ports, did you setup the entrypoint correctly?`
+                )
+              );
+            } catch {}
 
-              throw e;
-            }
+            throw e;
+          }
 
-            // If we're on the last attempt and the port is still not ready, fail
-            if (i === triesLeft - 1) {
-              try {
-                // TODO: Remove attempts, the end user doesn't care about this
-                await this.onError(
-                  `Failed to verify port ${port} is available after ${options.retries} attempts, last error: ${errorMessage}`
-                );
-              } catch {}
-              throw e;
-            }
+          // If we're on the last attempt and the port is still not ready, fail
+          if (i === triesLeft - 1) {
+            try {
+              // TODO: Remove attempts, the end user doesn't care about this
+              await this.onError(
+                `Failed to verify port ${port} is available after ${options.retries} attempts, last error: ${errorMessage}`
+              );
+            } catch {}
+            throw e;
+          }
 
-            // Wait a bit before trying again
-            await Promise.any([
-              new Promise(resolve => setTimeout(resolve, options.waitInterval)),
-              abortedSignal,
-            ]);
+          // Wait a bit before trying again
+          await Promise.any([
+            new Promise(resolve => setTimeout(resolve, options.waitInterval)),
+            abortedSignal,
+          ]);
 
-            if (options.abort?.aborted) {
-              throw new Error('Container request timed out.');
-            }
+          if (options.abort?.aborted) {
+            throw new Error('Container request timed out.');
           }
         }
       }
-    });
-
-    if (errorFromBCW) {
-      throw errorFromBCW;
     }
 
     this.setupMonitorCallbacks();
