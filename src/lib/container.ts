@@ -746,18 +746,22 @@ export class Container<Env = unknown> extends DurableObject<Env> {
    * @param request The request to handle
    */
   override async fetch(request: Request): Promise<Response> {
-    const url = new URL(request.url);
-    if (this.defaultPort === undefined && url.port === '') {
+    if (this.defaultPort === undefined && !request.headers.has('cf-container-target-port')) {
       throw new Error(
-        'No port configured for this container. Set the defaultPort in your Container subclass, or set a port with switchPort.'
+        'No port configured for this container. Set the `defaultPort` in your Container subclass, or specify a port with `container.fetch(switchPort(request, port))`.'
       );
     }
 
-    const portValue = +(url.port === '' ? (this.defaultPort ?? '') : url.port);
-    if (isNaN(portValue)) {
-      throw new Error('port is not a number');
-    }
+    let portValue = this.defaultPort;
 
+    if (request.headers.has('cf-container-target-port')) {
+      const portFromHeaders = parseInt(request.headers.get('cf-container-target-port') ?? '');
+      if (isNaN(portFromHeaders)) {
+        throw new Error('port value from switchPort is not a number');
+      } else {
+        portValue = portFromHeaders;
+      }
+    }
     // Forward all requests (HTTP and WebSocket) to the container
     return await this.containerFetch(request, portValue);
   }
