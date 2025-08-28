@@ -31,13 +31,25 @@ export default {
     // If you want to route requests to a specific container,
     // pass a unique container identifier to .get()
 
+    if (pathname.startsWith('/startAndWaitForPorts')) {
+      const containerInstance = getContainer(env.MY_CONTAINER, pathname);
+      await containerInstance.startAndWaitForPorts(
+        undefined,
+        {},
+        {
+          envVars: { MESSAGE: 'hi from start and wait for ports' },
+        }
+      );
+      return containerInstance.fetch(request);
+    }
+
     if (pathname.startsWith('/container')) {
-      const containerInstance = getContainer(env.MY_CONTAINER, pathname)
+      const containerInstance = getContainer(env.MY_CONTAINER, pathname);
       return containerInstance.fetch(request);
     }
 
     if (pathname.startsWith('/error')) {
-      const containerInstance = getContainer(env.MY_CONTAINER, 'error-test')
+      const containerInstance = getContainer(env.MY_CONTAINER, 'error-test');
       return containerInstance.fetch(request);
     }
 
