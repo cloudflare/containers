@@ -60,7 +60,7 @@ export function getContainer<T extends Container>(
  * @example container.fetch(switchPort(request, 8090));
  */
 export function switchPort(request: Request, port: number): Request {
-  const url = new URL(request.url);
-  url.port = `${port}`;
-  return new Request(url, request);
+  const headers = new Headers(request.headers);
+  headers.set('cf-container-target-port', port.toString());
+  return new Request(request, { headers });
 }
