@@ -361,7 +361,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
   /**
    * Start the container and wait for ports to be available
-   * Based on containers-starter-go implementation
    *
    * This method builds on start() by adding port availability verification:
    * 1. Calls start() to ensure the container is running
@@ -376,7 +375,8 @@ export class Container<Env = unknown> extends DurableObject<Env> {
    * 3. defaultPort (if neither of the above is specified)
    *
    * @param ports - The ports to wait for (if undefined, uses requiredPorts or defaultPort)
-   * @param maxTries - Maximum number of attempts to connect to each port before failing
+   * @param cancellationOptions
+   * @param startOptions Override configuration on a per instance for env vars, entrypoint command and internet access
    * @throws Error if port checks fail after maxTries attempts
    */
   public async startAndWaitForPorts(
@@ -386,67 +386,56 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       instanceGetTimeoutMS?: number;
       portReadyTimeoutMS?: number;
       waitInterval?: number;
-    }
+    },
+    startOptions?: ContainerStartConfigOptions
   ): Promise<void> {
     // Determine which ports to check
-    let portsToCheck: number[] = [];
-
-    if (ports !== undefined) {
-      // Use explicitly provided ports (single port or array)
-      portsToCheck = Array.isArray(ports) ? ports : [ports];
-    } else if (this.requiredPorts && this.requiredPorts.length > 0) {
-      // Use requiredPorts class property if available
-      portsToCheck = [...this.requiredPorts];
-    } else if (this.defaultPort !== undefined) {
-      // Fall back to defaultPort if available
-      portsToCheck = [this.defaultPort];
-    }
+    const portsToCheck = await this.getPortsToCheck(ports);
 
     const state = await this.state.getState();
 
-    cancellationOptions ??= {};
-
-    let containerGetRetries = cancellationOptions.instanceGetTimeoutMS
-      ? Math.ceil(cancellationOptions.instanceGetTimeoutMS / INSTANCE_POLL_INTERVAL_MS)
-      : TRIES_TO_GET_CONTAINER;
-
-    cancellationOptions ??= {};
-
-    let totalPortReadyTries = cancellationOptions.portReadyTimeoutMS
-      ? Math.ceil(cancellationOptions.portReadyTimeoutMS / INSTANCE_POLL_INTERVAL_MS)
-      : TRIES_TO_GET_PORTS;
-
-    const options = {
-      abort: cancellationOptions.abort,
-      retries: containerGetRetries,
-      waitInterval: cancellationOptions.waitInterval ?? INSTANCE_POLL_INTERVAL_MS,
-      portToCheck: portsToCheck[0] ?? FALLBACK_PORT_TO_CHECK,
-    };
-
+    // if the container is already healthy and running, assume ports are ready
     if (state.status === 'healthy' && this.container.running) {
       if (this.container.running && !this.monitor) {
         // This is needed to setup the monitoring
-        await this.startContainerIfNotRunning(options);
+        // Start the container if it's not running
+        this.monitor = this.container.monitor();
         this.setupMonitorCallbacks();
       }
-
       return;
     }
 
     // trigger all onStop that we didn't do yet
     await this.syncPendingStoppedEvents();
 
+    // Prepare to start the container
+    cancellationOptions ??= {};
+    let containerGetRetries = cancellationOptions.instanceGetTimeoutMS
+      ? Math.ceil(cancellationOptions.instanceGetTimeoutMS / INSTANCE_POLL_INTERVAL_MS)
+      : TRIES_TO_GET_CONTAINER;
+
+    const waitOptions = {
+      abort: cancellationOptions.abort,
+      retries: containerGetRetries,
+      waitInterval: cancellationOptions.waitInterval ?? INSTANCE_POLL_INTERVAL_MS,
+      portToCheck: portsToCheck[0],
+    };
+
     const abortedSignal = new Promise(res => {
-      options.abort?.addEventListener('abort', () => {
+      waitOptions.abort?.addEventListener('abort', () => {
         res(true);
       });
     });
 
     // Start the container if it's not running
-    const triesUsed = await this.startContainerIfNotRunning(options);
+    const triesUsed = await this.startContainerIfNotRunning(waitOptions, startOptions);
 
-    const triesLeft = totalPortReadyTries - triesUsed;
     // Check each port
+    let totalPortReadyTries = cancellationOptions.portReadyTimeoutMS
+      ? Math.ceil(cancellationOptions.portReadyTimeoutMS / INSTANCE_POLL_INTERVAL_MS)
+      : TRIES_TO_GET_PORTS;
+    const triesLeft = totalPortReadyTries - triesUsed;
+
     for (const port of portsToCheck) {
       const tcpPort = this.container.getTcpPort(port);
       let portReady = false;
@@ -454,7 +443,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       // Try to connect to the port multiple times
       for (let i = 0; i < triesLeft && !portReady; i++) {
         try {
-          const combinedSignal = addTimeoutSignal(options.abort, PING_TIMEOUT_MS);
+          const combinedSignal = addTimeoutSignal(waitOptions.abort, PING_TIMEOUT_MS);
           await tcpPort.fetch('http://ping', { signal: combinedSignal });
 
           // Successfully connected to this port
@@ -464,7 +453,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
           // Check for specific error messages that indicate we should keep retrying
           const errorMessage = e instanceof Error ? e.message : String(e);
 
-          console.warn(`Error checking ${port}: ${errorMessage}`);
+          console.debug(`Error checking ${port}: ${errorMessage}`);
 
           // If not running, it means the container crashed
           if (!this.container.running) {
@@ -484,7 +473,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
             try {
               // TODO: Remove attempts, the end user doesn't care about this
               await this.onError(
-                `Failed to verify port ${port} is available after ${options.retries} attempts, last error: ${errorMessage}`
+                `Failed to verify port ${port} is available after ${waitOptions.retries} attempts, last error: ${errorMessage}`
               );
             } catch {}
             throw e;
@@ -492,11 +481,11 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
           // Wait a bit before trying again
           await Promise.any([
-            new Promise(resolve => setTimeout(resolve, options.waitInterval)),
+            new Promise(resolve => setTimeout(resolve, waitOptions.waitInterval)),
             abortedSignal,
           ]);
 
-          if (options.abort?.aborted) {
+          if (waitOptions.abort?.aborted) {
             throw new Error('Container request timed out.');
           }
         }
@@ -845,6 +834,23 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     return { request, port };
   }
 
+  private async getPortsToCheck(overridePorts?: number | number[]) {
+    let portsToCheck: number[] = [];
+
+    if (overridePorts !== undefined) {
+      // Use explicitly provided ports (single port or array)
+      portsToCheck = Array.isArray(overridePorts) ? overridePorts : [overridePorts];
+    } else if (this.requiredPorts && this.requiredPorts.length > 0) {
+      // Use requiredPorts class property if available
+      portsToCheck = [...this.requiredPorts];
+    } else {
+      // Fall back to defaultPort if available
+      portsToCheck = [this.defaultPort ?? FALLBACK_PORT_TO_CHECK];
+    }
+
+    return portsToCheck;
+  }
+
   // ===========================================
   //     CONTAINER INTERACTION & MONITORING
   // ===========================================
@@ -937,7 +943,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
           await handleError();
         }
 
-        console.warn(
+        console.debug(
           'Error checking if container is ready:',
           error instanceof Error ? error.message : String(error)
         );
@@ -973,8 +979,9 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       }
     }
 
-    // TODO: Remove the attempts reference here, the user just cares about the time
-    throw new Error(`Container did not start after ${waitOptions.retries} attempts`);
+    throw new Error(
+      `Container did not start after ${waitOptions.retries * waitOptions.waitInterval}ms`
+    );
   }
 
   private setupMonitorCallbacks() {
