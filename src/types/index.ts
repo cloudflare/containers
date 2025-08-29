@@ -43,7 +43,6 @@ export interface ContainerOptions {
   enableInternet?: boolean;
 }
 
-
 /**
  * Function to handle container events
  */
@@ -63,8 +62,8 @@ export interface ContainerStartConfigOptions {
 
 export interface WaitOptions {
   abort?: AbortSignal;
-  retries: number;
-  waitInterval: number;
+  retries?: number;
+  waitInterval?: number;
   portToCheck: number;
 }
 
