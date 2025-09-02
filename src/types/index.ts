@@ -43,7 +43,6 @@ export interface ContainerOptions {
   enableInternet?: boolean;
 }
 
-
 /**
  * Function to handle container events
  */
@@ -59,6 +58,19 @@ export interface ContainerStartConfigOptions {
   entrypoint?: string[];
   /** Whether to enable internet access for the container */
   enableInternet?: boolean;
+}
+
+export interface StartAndWaitForPortsOptions {
+  startOptions?: ContainerStartConfigOptions;
+  ports?: number | number[];
+  cancellationOptions?: CancellationOptions;
+}
+
+export interface CancellationOptions {
+  abort?: AbortSignal;
+  instanceGetTimeoutMS?: number;
+  portReadyTimeoutMS?: number;
+  waitInterval?: number;
 }
 
 export interface WaitOptions {
