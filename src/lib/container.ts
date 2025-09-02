@@ -416,19 +416,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     // Determine which ports to check
     const portsToCheck = await this.getPortsToCheck(ports);
 
-    const state = await this.state.getState();
-
-    // if the container is already healthy and running, assume ports are ready
-    if (state.status === 'healthy' && this.container.running) {
-      if (this.container.running && !this.monitor) {
-        // This is needed to setup the monitoring
-        // Start the container if it's not running
-        this.monitor = this.container.monitor();
-        this.setupMonitorCallbacks();
-      }
-      return;
-    }
-
     // trigger all onStop that we didn't do yet
     await this.syncPendingStoppedEvents();
 
