@@ -38,26 +38,16 @@ const INSTANCE_POLL_INTERVAL_MS = 300; // Default interval for polling container
 // Timeout for getting container instance and launching a VM
 // Time to find an instance, attach a DO, call start, but NOT
 // the time for the app the actually start
-const TIMEOUT_TO_GET_CONTAINER_SECONDS = 8;
+const TIMEOUT_TO_GET_CONTAINER_MS = 8_000;
 
 // Timeout for getting a container instance and launching
 // the actual application and have it listen for specific ports
 // One day might be configurable by the end user in Container class attribute
-const TIMEOUT_TO_GET_PORTS = 20;
-
-// Number of tries based on polling interval
-const TRIES_TO_GET_CONTAINER = Math.ceil(
-  (TIMEOUT_TO_GET_CONTAINER_SECONDS * 1000) / INSTANCE_POLL_INTERVAL_MS
-);
-const TRIES_TO_GET_PORTS = Math.ceil((TIMEOUT_TO_GET_PORTS * 1000) / INSTANCE_POLL_INTERVAL_MS);
+const TIMEOUT_TO_GET_PORTS_MS = 20_000;
 
 // If user has specified no ports and we need to check one
 // to see if the container is up at all.
 const FALLBACK_PORT_TO_CHECK = 33;
-
-// Since the timing isn't working, hard coding a max attempts seems
-// to be the only viable solution for now
-const TEMPORARY_HARDCODED_ATTEMPT_MAX = 6;
 
 export type Signal = 'SIGKILL' | 'SIGINT' | 'SIGTERM';
 export type SignalInteger = number;
@@ -338,19 +328,22 @@ export class Container<Env = unknown> extends DurableObject<Env> {
    * @throws Error if no container context is available or if all start attempts fail
    */
   public async start(
-    options?: ContainerStartConfigOptions,
-    waitOptions?: { signal?: AbortSignal }
+    startOptions?: ContainerStartConfigOptions,
+    waitOptions?: WaitOptions
   ): Promise<void> {
     const portToCheck =
-      this.defaultPort ?? (this.requiredPorts ? this.requiredPorts[0] : FALLBACK_PORT_TO_CHECK);
+      waitOptions?.portToCheck ??
+      this.defaultPort ??
+      (this.requiredPorts ? this.requiredPorts[0] : FALLBACK_PORT_TO_CHECK);
+    const pollInterval = waitOptions?.waitInterval ?? INSTANCE_POLL_INTERVAL_MS;
     await this.startContainerIfNotRunning(
       {
-        abort: waitOptions?.signal,
-        waitInterval: INSTANCE_POLL_INTERVAL_MS,
-        retries: TRIES_TO_GET_CONTAINER,
+        signal: waitOptions?.signal,
+        waitInterval: pollInterval,
+        retries: waitOptions?.retries ?? Math.ceil(TIMEOUT_TO_GET_CONTAINER_MS / pollInterval),
         portToCheck,
       },
-      options
+      startOptions
     );
 
     this.setupMonitorCallbacks();
@@ -416,104 +409,40 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     // Determine which ports to check
     const portsToCheck = await this.getPortsToCheck(ports);
 
-    const state = await this.state.getState();
-
-    // if the container is already healthy and running, assume ports are ready
-    if (state.status === 'healthy' && this.container.running) {
-      if (this.container.running && !this.monitor) {
-        // This is needed to setup the monitoring
-        // Start the container if it's not running
-        this.monitor = this.container.monitor();
-        this.setupMonitorCallbacks();
-      }
-      return;
-    }
-
     // trigger all onStop that we didn't do yet
     await this.syncPendingStoppedEvents();
 
     // Prepare to start the container
     resolvedCancellationOptions ??= {};
-    let containerGetRetries = resolvedCancellationOptions.instanceGetTimeoutMS
-      ? Math.ceil(resolvedCancellationOptions.instanceGetTimeoutMS / INSTANCE_POLL_INTERVAL_MS)
-      : TRIES_TO_GET_CONTAINER;
+    const containerGetTimeout =
+      resolvedCancellationOptions.instanceGetTimeoutMS ?? TIMEOUT_TO_GET_CONTAINER_MS;
+    const pollInterval = resolvedCancellationOptions.waitInterval ?? INSTANCE_POLL_INTERVAL_MS;
+    let containerGetRetries = Math.ceil(containerGetTimeout / pollInterval);
 
-    const waitOptions = {
-      abort: resolvedCancellationOptions.abort,
+    const waitOptions: WaitOptions = {
+      signal: resolvedCancellationOptions.abort,
       retries: containerGetRetries,
-      waitInterval: resolvedCancellationOptions.waitInterval ?? INSTANCE_POLL_INTERVAL_MS,
+      waitInterval: pollInterval,
       portToCheck: portsToCheck[0],
     };
-
-    const abortedSignal = new Promise(res => {
-      waitOptions.abort?.addEventListener('abort', () => {
-        res(true);
-      });
-    });
 
     // Start the container if it's not running
     const triesUsed = await this.startContainerIfNotRunning(waitOptions, resolvedStartOptions);
 
     // Check each port
-    let totalPortReadyTries = resolvedCancellationOptions.portReadyTimeoutMS
-      ? Math.ceil(resolvedCancellationOptions.portReadyTimeoutMS / INSTANCE_POLL_INTERVAL_MS)
-      : TRIES_TO_GET_PORTS;
-    const triesLeft = totalPortReadyTries - triesUsed;
+
+    const totalPortReadyTries = Math.ceil(
+      resolvedCancellationOptions.portReadyTimeoutMS ?? TIMEOUT_TO_GET_PORTS_MS / pollInterval
+    );
+    let triesLeft = totalPortReadyTries - triesUsed;
 
     for (const port of portsToCheck) {
-      const tcpPort = this.container.getTcpPort(port);
-      let portReady = false;
-
-      // Try to connect to the port multiple times
-      for (let i = 0; i < triesLeft && !portReady; i++) {
-        try {
-          const combinedSignal = addTimeoutSignal(waitOptions.abort, PING_TIMEOUT_MS);
-          await tcpPort.fetch('http://ping', { signal: combinedSignal });
-
-          // Successfully connected to this port
-          portReady = true;
-          console.log(`Port ${port} is ready`);
-        } catch (e) {
-          // Check for specific error messages that indicate we should keep retrying
-          const errorMessage = e instanceof Error ? e.message : String(e);
-
-          console.debug(`Error checking ${port}: ${errorMessage}`);
-
-          // If not running, it means the container crashed
-          if (!this.container.running) {
-            try {
-              await this.onError(
-                new Error(
-                  `Container crashed while checking for ports, did you setup the entrypoint correctly?`
-                )
-              );
-            } catch {}
-
-            throw e;
-          }
-
-          // If we're on the last attempt and the port is still not ready, fail
-          if (i === triesLeft - 1) {
-            try {
-              // TODO: Remove attempts, the end user doesn't care about this
-              await this.onError(
-                `Failed to verify port ${port} is available after ${waitOptions.retries} attempts, last error: ${errorMessage}`
-              );
-            } catch {}
-            throw e;
-          }
-
-          // Wait a bit before trying again
-          await Promise.any([
-            new Promise(resolve => setTimeout(resolve, waitOptions.waitInterval)),
-            abortedSignal,
-          ]);
-
-          if (waitOptions.abort?.aborted) {
-            throw new Error('Container request timed out.');
-          }
-        }
-      }
+      triesLeft = await this.waitForPort({
+        signal: resolvedCancellationOptions.abort,
+        waitInterval: pollInterval,
+        retries: triesLeft,
+        portToCheck: port,
+      });
     }
 
     this.setupMonitorCallbacks();
@@ -525,6 +454,79 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     });
   }
 
+  /**
+   *
+   * Waits for a specified port to be ready
+   *
+   * Returns the number of tries used to get the port, or throws if it couldn't get the port within the specified retry limits.
+   *
+   * @param waitOptions -
+   * - `portToCheck`: The port number to check
+   * - `abort`: Optional AbortSignal to cancel waiting
+   * - `retries`: Number of retries before giving up (default: TRIES_TO_GET_PORTS)
+   * - `waitInterval`: Interval between retries in milliseconds (default: INSTANCE_POLL_INTERVAL_MS)
+   */
+  public async waitForPort(waitOptions: WaitOptions): Promise<number> {
+    const port = waitOptions.portToCheck;
+    const tcpPort = this.container.getTcpPort(port);
+    const abortedSignal = new Promise(res => {
+      waitOptions.signal?.addEventListener('abort', () => {
+        res(true);
+      });
+    });
+    const pollInterval = waitOptions.waitInterval ?? INSTANCE_POLL_INTERVAL_MS;
+    let tries = waitOptions.retries ?? Math.ceil(TIMEOUT_TO_GET_PORTS_MS / pollInterval);
+
+    // Try to connect to the port multiple times
+    for (let i = 0; i < tries; i++) {
+      try {
+        const combinedSignal = addTimeoutSignal(waitOptions.signal, PING_TIMEOUT_MS);
+        await tcpPort.fetch('http://ping', { signal: combinedSignal });
+
+        // Successfully connected to this port
+        console.log(`Port ${port} is ready`);
+        break;
+      } catch (e) {
+        // Check for specific error messages that indicate we should keep retrying
+        const errorMessage = e instanceof Error ? e.message : String(e);
+
+        console.debug(`Error checking ${port}: ${errorMessage}`);
+
+        // If not running, it means the container crashed
+        if (!this.container.running) {
+          try {
+            await this.onError(
+              new Error(
+                `Container crashed while checking for ports, did you setup the entrypoint correctly?`
+              )
+            );
+          } catch {}
+
+          throw e;
+        }
+
+        // If we're on the last attempt and the port is still not ready, fail
+        if (i === tries - 1) {
+          try {
+            await this.onError(
+              `Failed to verify port ${port} is available after ${(i + 1) * pollInterval}ms, last error: ${errorMessage}`
+            );
+          } catch {}
+          throw e;
+        }
+
+        // Wait a bit before trying again
+        await Promise.any([
+          new Promise(resolve => setTimeout(resolve, waitOptions.waitInterval)),
+          abortedSignal,
+        ]);
+        if (waitOptions.signal?.aborted) {
+          throw new Error('Container request aborted.');
+        }
+      }
+    }
+    return tries;
+  }
   // =======================
   //     LIFECYCLE HOOKS
   // =======================
@@ -723,7 +725,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       }
     }
 
-    const tcpPort = this.container.getTcpPort(port!);
+    const tcpPort = this.container.getTcpPort(port);
 
     // Create URL for the container request
     const containerUrl = request.url.replace('https:', 'http:');
@@ -822,7 +824,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     requestOrUrl: Request | string | URL,
     portOrInit?: number | RequestInit,
     portParam?: number
-  ): { request: Request; port: number | undefined } {
+  ): { request: Request; port: number } {
     let request: Request;
     let port: number | undefined;
 
@@ -845,15 +847,13 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       // Create a Request object
       request = new Request(url, init);
     }
-
+    port ??= this.defaultPort;
     // Require a port to be specified, either as a parameter or as a defaultPort property
-    if (port === undefined && this.defaultPort === undefined) {
+    if (port === undefined) {
       throw new Error(
         'No port specified for container fetch. Set defaultPort or specify a port parameter.'
       );
     }
-
-    port = port ?? this.defaultPort;
 
     return { request, port };
   }
@@ -895,13 +895,14 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     }
 
     const abortedSignal = new Promise(res => {
-      waitOptions.abort?.addEventListener('abort', () => {
+      waitOptions.signal?.addEventListener('abort', () => {
         res(true);
       });
     });
-
+    const pollInterval = waitOptions.waitInterval ?? INSTANCE_POLL_INTERVAL_MS;
+    const totalTries = waitOptions.retries ?? Math.ceil(TIMEOUT_TO_GET_CONTAINER_MS / pollInterval);
     await this.state.setRunning();
-    for (let tries = 0; tries < waitOptions.retries; tries++) {
+    for (let tries = 0; tries < totalTries; tries++) {
       // Use provided options or fall back to instance properties
       const envVars = options?.envVars ?? this.envVars;
       const entrypoint = options?.entrypoint ?? this.entrypoint;
@@ -921,7 +922,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
         if (typeof err === 'number') {
           const toThrow = new Error(
-            `Error starting container, early exit code 0 before we could check for healthiness, did it crash early?`
+            `Container exited before we could determine the container health, exit code: ${err}`
           );
 
           try {
@@ -955,7 +956,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       // TODO: Make this the port I'm trying to get!
       const port = this.container.getTcpPort(waitOptions.portToCheck);
       try {
-        const combinedSignal = addTimeoutSignal(waitOptions.abort, PING_TIMEOUT_MS);
+        const combinedSignal = addTimeoutSignal(waitOptions.signal, PING_TIMEOUT_MS);
         await port.fetch('http://containerstarthealthcheck', { signal: combinedSignal });
         return tries;
       } catch (error) {
@@ -977,15 +978,14 @@ export class Container<Env = unknown> extends DurableObject<Env> {
           abortedSignal,
         ]);
 
-        if (waitOptions.abort?.aborted) {
+        if (waitOptions.signal?.aborted) {
           throw new Error(
             'Aborted waiting for container to start as we received a cancellation signal'
           );
         }
 
-        // TODO: Don't hardcode to 3, use the max attempts
         // TODO: Make this error specific to this, but then catch it above w something else
-        if (TEMPORARY_HARDCODED_ATTEMPT_MAX === tries) {
+        if (totalTries === tries + 1) {
           if (error instanceof Error && error.message.includes('Network connection lost')) {
             // We have to abort here, the reasoning is that we might've found
             // ourselves in an internal error where the Worker is stuck with a failed connection to the
@@ -1003,9 +1003,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       }
     }
 
-    throw new Error(
-      `Container did not start after ${waitOptions.retries * waitOptions.waitInterval}ms`
-    );
+    throw new Error(`Container did not start after ${totalTries * pollInterval}ms`);
   }
 
   private setupMonitorCallbacks() {
