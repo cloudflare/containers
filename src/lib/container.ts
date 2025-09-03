@@ -7,6 +7,8 @@ import type {
   ScheduleSQL,
   State,
   WaitOptions,
+  CancellationOptions,
+  StartAndWaitForPortsOptions,
 } from '../types';
 import { generateId, parseTimeExpression } from './helpers';
 import { DurableObject } from 'cloudflare:workers';
@@ -379,16 +381,38 @@ export class Container<Env = unknown> extends DurableObject<Env> {
    * @param startOptions Override configuration on a per instance for env vars, entrypoint command and internet access
    * @throws Error if port checks fail after maxTries attempts
    */
+  public async startAndWaitForPorts(args: StartAndWaitForPortsOptions): Promise<void>;
   public async startAndWaitForPorts(
     ports?: number | number[],
-    cancellationOptions?: {
-      abort?: AbortSignal;
-      instanceGetTimeoutMS?: number;
-      portReadyTimeoutMS?: number;
-      waitInterval?: number;
-    },
+    cancellationOptions?: CancellationOptions,
+    startOptions?: ContainerStartConfigOptions
+  ): Promise<void>;
+  public async startAndWaitForPorts(
+    portsOrArgs?: number | number[] | StartAndWaitForPortsOptions,
+    cancellationOptions?: CancellationOptions,
+    startOptions?: ContainerStartConfigOptions
+  ): Promise<void>;
+  public async startAndWaitForPorts(
+    portsOrArgs?: number | number[] | StartAndWaitForPortsOptions,
+    cancellationOptions?: CancellationOptions,
     startOptions?: ContainerStartConfigOptions
   ): Promise<void> {
+    // Parse arguments to handle different overload signatures
+    let ports: number | number[] | undefined;
+    let resolvedCancellationOptions: CancellationOptions | undefined = {};
+    let resolvedStartOptions: ContainerStartConfigOptions | undefined = {};
+
+    if (typeof portsOrArgs === 'object' && portsOrArgs !== null && !Array.isArray(portsOrArgs)) {
+      // Object-based overload: { startOptions?, ports?, cancellationOptions? }
+      ports = portsOrArgs.ports;
+      resolvedCancellationOptions = portsOrArgs.cancellationOptions;
+      resolvedStartOptions = portsOrArgs.startOptions;
+    } else {
+      ports = portsOrArgs;
+      resolvedCancellationOptions = cancellationOptions;
+      resolvedStartOptions = startOptions;
+    }
+
     // Determine which ports to check
     const portsToCheck = await this.getPortsToCheck(ports);
 
@@ -409,15 +433,15 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     await this.syncPendingStoppedEvents();
 
     // Prepare to start the container
-    cancellationOptions ??= {};
-    let containerGetRetries = cancellationOptions.instanceGetTimeoutMS
-      ? Math.ceil(cancellationOptions.instanceGetTimeoutMS / INSTANCE_POLL_INTERVAL_MS)
+    resolvedCancellationOptions ??= {};
+    let containerGetRetries = resolvedCancellationOptions.instanceGetTimeoutMS
+      ? Math.ceil(resolvedCancellationOptions.instanceGetTimeoutMS / INSTANCE_POLL_INTERVAL_MS)
       : TRIES_TO_GET_CONTAINER;
 
     const waitOptions = {
-      abort: cancellationOptions.abort,
+      abort: resolvedCancellationOptions.abort,
       retries: containerGetRetries,
-      waitInterval: cancellationOptions.waitInterval ?? INSTANCE_POLL_INTERVAL_MS,
+      waitInterval: resolvedCancellationOptions.waitInterval ?? INSTANCE_POLL_INTERVAL_MS,
       portToCheck: portsToCheck[0],
     };
 
@@ -428,11 +452,11 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     });
 
     // Start the container if it's not running
-    const triesUsed = await this.startContainerIfNotRunning(waitOptions, startOptions);
+    const triesUsed = await this.startContainerIfNotRunning(waitOptions, resolvedStartOptions);
 
     // Check each port
-    let totalPortReadyTries = cancellationOptions.portReadyTimeoutMS
-      ? Math.ceil(cancellationOptions.portReadyTimeoutMS / INSTANCE_POLL_INTERVAL_MS)
+    let totalPortReadyTries = resolvedCancellationOptions.portReadyTimeoutMS
+      ? Math.ceil(resolvedCancellationOptions.portReadyTimeoutMS / INSTANCE_POLL_INTERVAL_MS)
       : TRIES_TO_GET_PORTS;
     const triesLeft = totalPortReadyTries - triesUsed;
 

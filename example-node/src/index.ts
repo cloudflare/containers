@@ -33,13 +33,10 @@ export default {
 
     if (pathname.startsWith('/startAndWaitForPorts')) {
       const containerInstance = getContainer(env.MY_CONTAINER, pathname);
-      await containerInstance.startAndWaitForPorts(
-        undefined,
-        {},
-        {
-          envVars: { MESSAGE: 'hi from start and wait for ports' },
-        }
-      );
+      await containerInstance.startAndWaitForPorts({
+        startOptions: { envVars: { MESSAGE: 'hi from start and wait for ports' } },
+      });
+
       return containerInstance.fetch(request);
     }
 
