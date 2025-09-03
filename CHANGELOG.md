@@ -1,5 +1,13 @@
 # @cloudflare/containers
 
+## 0.0.28
+
+### Patch Changes
+
+- 1a6c6d9: add function overload to startAndWaitForPorts()
+
+  You can now use `startAndWaitForPorts({startOptions: {envVars: {FOO:"BAR"}}})` instead of `startAndWaitForPorts(undefined, {},  {envVars: {FOO:"BAR"}})`, although that is still supported.
+
 ## 0.0.27
 
 ### Patch Changes
