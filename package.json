@@ -11,8 +11,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts,.tsx --config .eslintrc.js",
     "format": "prettier --write \"src/**/*.ts\"",
-    "test": "jest",
-    "test:watch": "jest --watch"
+    "test": "vitest run"
   },
   "exports": {
     ".": {
@@ -44,7 +43,8 @@
     "prettier": "^3.5.3",
     "ts-jest": "^29.3.2",
     "tsup": "^8.0.2",
-    "typescript": "latest"
+    "typescript": "latest",
+    "vitest": "^1.0.0"
   },
   "publishConfig": {
     "access": "public"
