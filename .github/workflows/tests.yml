@@ -1,0 +1,52 @@
+name: Tests
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        working-directory: fixtures/basic
+        run: npm install
+        
+      - name: Run integration tests
+        working-directory: fixtures/basic
+        run: npm run test
+        timeout-minutes: 10
+        
+        
+  type-check:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check fixtures
+        working-directory: fixtures/basic
+        run: npx tsc --noEmit
