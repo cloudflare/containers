@@ -39,14 +39,20 @@ declare global {
 describe('Container', () => {
   let mockCtx: any;
   let container: Container;
+  let mockEnv: any;
 
   beforeEach(() => {
+    mockEnv = {};
     // Create a mock context with necessary container methods
     mockCtx = {
       storage: {
         sql: {
           exec: jest.fn().mockReturnValue([]),
         },
+        put: jest.fn(),
+        get: jest.fn(),
+        setAlarm: jest.fn(),
+        sync: jest.fn(),
       },
       blockConcurrencyWhile: jest.fn(fn => fn()),
       container: {

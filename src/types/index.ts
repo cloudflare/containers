@@ -21,14 +21,70 @@ export interface ContainerMessage<T = unknown> {
 // Container state interface removed
 
 /**
- * Options for container configuration
+ * R2 bucket binding configuration
  */
-export interface ContainerOptions {
+export interface R2Binding {
+  /** Name of the R2 binding variable for API access */
+  binding: string;
+  /** Name of the R2 bucket to bind */
+  bucketName: string;
+}
+
+/**
+ * Secrets Store binding configuration
+ */
+export interface SecretsStoreBinding {
+  /** Name of the binding in your Worker environment */
+  binding: string;
+  /** ID of the secrets store */
+  storeId: string;
+  /** Name of the secret within the store */
+  secretName: string;
+}
+
+/**
+ * Options for container exec operations
+ */
+export interface ExecOptions {
+  /** Working directory for the command */
+  workingDirectory?: string;
+  /** Environment variables for the command */
+  env?: Record<string, string>;
+  /** Timeout for the command execution in milliseconds */
+  timeout?: number;
+  /** AbortSignal to cancel the command */
+  signal?: AbortSignal;
+}
+
+/**
+ * Result of a container exec operation
+ */
+export interface ExecResult {
+  /** Exit code of the executed command */
+  exitCode: number;
+  /** Standard output from the command */
+  stdout: string;
+  /** Standard error from the command */
+  stderr: string;
+  /** Whether the command completed successfully (exitCode === 0) */
+  success: boolean;
+  /** Duration of command execution in milliseconds */
+  duration: number;
+}
+
+/**
+ * Container specification for configuration
+ * Supports configuring all core container features at initialization time
+ */
+export interface ContainerSpec {
   /** Optional ID for the container */
   id?: string;
 
-  /** Default port number to connect to (defaults to container.defaultPort) */
+  /** Default port number to connect to */
   defaultPort?: number;
+
+  /** Required ports that should be checked for availability during container startup */
+  requiredPorts?: number[];
 
   /** How long to keep the container alive without activity */
   sleepAfter?: string | number;
@@ -41,6 +97,18 @@ export interface ContainerOptions {
 
   /** Whether to enable internet access for the container */
   enableInternet?: boolean;
+
+  /** Callback triggered when container starts successfully */
+  onStart?: () => void | Promise<void>;
+
+  /** Callback triggered when container stops */
+  onStop?: (params: StopParams) => void | Promise<void>;
+
+  /** Callback triggered when container encounters an error */
+  onError?: (error: unknown) => any;
+
+  /** Callback triggered when activity timeout expires */
+  onActivityExpired?: () => Promise<void>;
 }
 
 /**

@@ -1,5 +1,5 @@
 import type {
-  ContainerOptions,
+  ContainerSpec,
   ContainerStartOptions,
   ContainerStartConfigOptions,
   Schedule,
@@ -233,11 +233,18 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   entrypoint: ContainerStartOptions['entrypoint'];
   enableInternet: ContainerStartOptions['enableInternet'] = true;
 
+  // Lifecycle hooks - configured via constructor options
+  private _onStartHook?: () => void | Promise<void>;
+  private _onStopHook?: (params: StopParams) => void | Promise<void>;
+  private _onErrorHook?: (error: unknown) => any;
+  private _onActivityExpiredHook?: () => Promise<void>;
+
+
   // =========================
   //     PUBLIC INTERFACE
   // =========================
 
-  constructor(ctx: DurableObject['ctx'], env: Env, options?: ContainerOptions) {
+  constructor(ctx: DurableObject['ctx'], env: Env, spec?: ContainerSpec) {
     super(ctx, env);
 
     if (ctx.container === undefined) {
@@ -257,10 +264,21 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
     this.container = ctx.container;
 
-    // Apply options if provided
-    if (options) {
-      if (options.defaultPort !== undefined) this.defaultPort = options.defaultPort;
-      if (options.sleepAfter !== undefined) this.sleepAfter = options.sleepAfter;
+    // Apply container spec if provided
+    if (spec) {
+      // Core container configuration
+      if (spec.defaultPort !== undefined) this.defaultPort = spec.defaultPort;
+      if (spec.requiredPorts !== undefined) this.requiredPorts = [...spec.requiredPorts];
+      if (spec.sleepAfter !== undefined) this.sleepAfter = spec.sleepAfter;
+      if (spec.envVars !== undefined) this.envVars = { ...spec.envVars };
+      if (spec.entrypoint !== undefined) this.entrypoint = [...spec.entrypoint];
+      if (spec.enableInternet !== undefined) this.enableInternet = spec.enableInternet;
+
+      // Lifecycle hooks configuration
+      if (spec.onStart !== undefined) this._onStartHook = spec.onStart;
+      if (spec.onStop !== undefined) this._onStopHook = spec.onStop;
+      if (spec.onError !== undefined) this._onErrorHook = spec.onError;
+      if (spec.onActivityExpired !== undefined) this._onActivityExpiredHook = spec.onActivityExpired;
     }
 
     // Create schedules table if it doesn't exist
@@ -546,18 +564,24 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
   /**
    * Lifecycle method called when container starts successfully
-   * Override this method in subclasses to handle container start events
+   * Can be overridden in subclasses or configured via constructor options
    */
   public onStart(): void | Promise<void> {
+    if (this._onStartHook) {
+      return this._onStartHook();
+    }
     // Default implementation does nothing
   }
 
   /**
    * Lifecycle method called when container shuts down
-   * Override this method in subclasses to handle Container stopped events
+   * Can be overridden in subclasses or configured via constructor options
    * @param params - Object containing exitCode and reason for the stop
    */
-  public onStop(_: StopParams): void | Promise<void> {
+  public onStop(params: StopParams): void | Promise<void> {
+    if (this._onStopHook) {
+      return this._onStopHook(params);
+    }
     // Default implementation does nothing
   }
 
@@ -566,6 +590,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
    * expiration has been reached.
    *
    * If you want to shutdown the container, you should call this.stop() here
+   * Can be overridden in subclasses or configured via constructor options
    *
    * By default, this method calls `this.stop()`
    */
@@ -574,16 +599,23 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       return;
     }
 
+    if (this._onActivityExpiredHook) {
+      return await this._onActivityExpiredHook();
+    }
+    
     await this.stop();
   }
 
   /**
    * Error handler for container errors
-   * Override this method in subclasses to handle container errors
+   * Can be overridden in subclasses or configured via constructor options
    * @param error - The error that occurred
    * @returns Can return any value or throw the error
    */
   public onError(error: unknown): any {
+    if (this._onErrorHook) {
+      return this._onErrorHook(error);
+    }
     console.error('Container error:', error);
     throw error;
   }
@@ -597,6 +629,8 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     const timeoutInMs = parseTimeExpression(this.sleepAfter) * 1000;
     this.sleepAfterMs = Date.now() + timeoutInMs;
   }
+
+
 
   // ==================
   //     SCHEDULING
