@@ -138,3 +138,75 @@ export type State = {
       exitCode?: number;
     }
 );
+
+/**
+ * Options for creating a checkpoint
+ */
+export interface CheckpointOptions {
+  /** Optional custom name for the checkpoint */
+  name?: string;
+  /** Specific path to checkpoint (defaults to entire container filesystem) */
+  path?: string;
+  /** Custom timeout for checkpoint operation in seconds */
+  timeoutSeconds?: number;
+}
+
+/**
+ * Result of a checkpoint operation
+ */
+export interface CheckpointResult {
+  /** Auto-generated checkpoint ID */
+  checkpointId: string;
+  /** Full R2 path where checkpoint is stored */
+  r2Path: string;
+  /** Timestamp when checkpoint was created */
+  createdAt: Date;
+  /** Size of checkpoint in bytes */
+  sizeBytes: number;
+  /** Path that was checkpointed */
+  checkpointedPath: string;
+}
+
+/**
+ * Options for restoring from a checkpoint
+ */
+export interface RestoreOptions {
+  /** Checkpoint ID to restore from */
+  checkpointId: string;
+  /** Custom timeout for restore operation in seconds */
+  timeoutSeconds?: number;
+  /** Whether to start container after restore (default: true) */
+  startAfterRestore?: boolean;
+}
+
+/**
+ * Result of a restore operation
+ */
+export interface RestoreResult {
+  /** Checkpoint ID that was restored */
+  checkpointId: string;
+  /** Path where data was restored */
+  restoredPath: string;
+  /** Timestamp when restore completed */
+  restoredAt: Date;
+  /** Size of data restored in bytes */
+  restoredSizeBytes: number;
+}
+
+/**
+ * Information about a stored checkpoint
+ */
+export interface CheckpointInfo {
+  /** Checkpoint ID */
+  checkpointId: string;
+  /** R2 path */
+  r2Path: string;
+  /** Creation timestamp */
+  createdAt: Date;
+  /** Expiration timestamp (2 weeks from creation) */
+  expiresAt: Date;
+  /** Size in bytes */
+  sizeBytes: number;
+  /** Original path that was checkpointed */
+  originalPath: string;
+}

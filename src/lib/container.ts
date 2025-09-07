@@ -9,6 +9,11 @@ import type {
   WaitOptions,
   CancellationOptions,
   StartAndWaitForPortsOptions,
+  CheckpointOptions,
+  CheckpointResult,
+  RestoreOptions,
+  RestoreResult,
+  CheckpointInfo,
 } from '../types';
 import { generateId, parseTimeExpression } from './helpers';
 import { DurableObject } from 'cloudflare:workers';
@@ -274,6 +279,30 @@ export class Container<Env = unknown> extends DurableObject<Env> {
         delayInSeconds INTEGER,
         created_at INTEGER DEFAULT (unixepoch())
       )
+    `;
+
+    // Create checkpoints table if it doesn't exist
+    this.sql`
+      CREATE TABLE IF NOT EXISTS container_checkpoints (
+        checkpoint_id TEXT PRIMARY KEY NOT NULL,
+        container_id TEXT NOT NULL,
+        container_name TEXT NOT NULL,
+        r2_path TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        size_bytes INTEGER NOT NULL,
+        original_path TEXT NOT NULL
+      )
+    `;
+
+    // Create index for efficient queries
+    this.sql`
+      CREATE INDEX IF NOT EXISTS idx_container_checkpoints_container_id 
+      ON container_checkpoints(container_id)
+    `;
+    
+    this.sql`
+      CREATE INDEX IF NOT EXISTS idx_container_checkpoints_created_at 
+      ON container_checkpoints(created_at)
     `;
 
     if (this.container.running) {
@@ -596,6 +625,234 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   public renewActivityTimeout() {
     const timeoutInMs = parseTimeExpression(this.sleepAfter) * 1000;
     this.sleepAfterMs = Date.now() + timeoutInMs;
+  }
+
+  // ==================
+  //     CHECKPOINTING
+  // ==================
+
+  /**
+   * Create a checkpoint of the container's filesystem
+   * 
+   * This method creates a snapshot of the container's filesystem (or a specific path)
+   * and stores it in R2 for later restoration. The checkpoint is automatically named
+   * based on the container instance and timestamp.
+   * 
+   * @example
+   * // Basic usage - checkpoint entire container
+   * const result = await container.checkpoint();
+   * console.log('Checkpoint created:', result.checkpointId);
+   * 
+   * @example
+   * // Checkpoint specific directory
+   * const result = await container.checkpoint({ path: '/app' });
+   * 
+   * @param options - Optional configuration for the checkpoint
+   * @returns Promise<CheckpointResult> containing checkpoint details
+   * @throws Error if container is not running or checkpoint fails
+   */
+  public async checkpoint(options?: CheckpointOptions): Promise<CheckpointResult> {
+    const state = await this.getState();
+    if (state.status !== 'healthy' && state.status !== 'running') {
+      throw new Error('Container must be running to create a checkpoint');
+    }
+
+    // Generate checkpoint ID and R2 path
+    const timestamp = new Date();
+    const timestampStr = timestamp.toISOString().replace(/[:.]/g, '-').slice(0, -5); // yyyy-mm-ddThh-mm-ss
+    const checkpointId = `${this.getContainerName()}-${this.ctx.id.toString()}-${timestampStr}`;
+    const checkpointPath = options?.path || '/';
+    const timeoutSeconds = options?.timeoutSeconds || 300; // 5 minute default
+    
+    const r2Path = `container-checkpoints/${this.getContainerName()}/${this.ctx.id.toString()}/container-snapshot-${timestampStr}`;
+
+    try {
+      // Execute checkpoint command in container
+      const checkpointResult = await this.executeCheckpointCommand(checkpointPath, r2Path, timeoutSeconds);
+      
+      // Store checkpoint metadata
+      await this.storeCheckpointMetadata({
+        checkpointId,
+        r2Path,
+        createdAt: timestamp,
+        sizeBytes: checkpointResult.sizeBytes,
+        originalPath: checkpointPath,
+      });
+
+      this.renewActivityTimeout();
+
+      return {
+        checkpointId,
+        r2Path,
+        createdAt: timestamp,
+        sizeBytes: checkpointResult.sizeBytes,
+        checkpointedPath: checkpointPath,
+      };
+    } catch (error) {
+      await this.onError(`Failed to create checkpoint: ${error instanceof Error ? error.message : String(error)}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Restore container from a checkpoint
+   * 
+   * This method restores the container's filesystem from a previously created checkpoint.
+   * The container will be stopped, data restored to the original paths, and optionally restarted.
+   * 
+   * @example
+   * // Basic restore
+   * const result = await container.restore({ checkpointId: 'my-container-123-2023-12-01T10-30-00' });
+   * 
+   * @example
+   * // Restore without auto-starting
+   * const result = await container.restore({
+   *   checkpointId: 'my-container-123-2023-12-01T10-30-00',
+   *   startAfterRestore: false
+   * });
+   * 
+   * @param options - Configuration for the restore operation
+   * @returns Promise<RestoreResult> containing restore details
+   * @throws Error if checkpoint doesn't exist or restore fails
+   */
+  public async restore(options: RestoreOptions): Promise<RestoreResult> {
+    const timeoutSeconds = options.timeoutSeconds || 300; // 5 minute default
+    const startAfterRestore = options.startAfterRestore !== false; // default true
+
+    // Get checkpoint metadata
+    const checkpointInfo = await this.getCheckpointInfo(options.checkpointId);
+    if (!checkpointInfo) {
+      throw new Error(`Checkpoint ${options.checkpointId} not found`);
+    }
+
+    // Check if checkpoint has expired
+    if (new Date() > checkpointInfo.expiresAt) {
+      throw new Error(`Checkpoint ${options.checkpointId} has expired`);
+    }
+
+    try {
+      // Stop container if running
+      if (this.container.running) {
+        await this.stop();
+        // Wait for container to stop
+        await this.waitForStop();
+      }
+
+      // Start container in preparation for restore
+      await this.start();
+      
+      // Execute restore command
+      const restoreResult = await this.executeRestoreCommand(
+        checkpointInfo.r2Path,
+        checkpointInfo.originalPath,
+        timeoutSeconds
+      );
+
+      // Restart container if requested
+      if (startAfterRestore) {
+        await this.stop();
+        await this.waitForStop();
+        await this.startAndWaitForPorts();
+      }
+
+      this.renewActivityTimeout();
+
+      return {
+        checkpointId: options.checkpointId,
+        restoredPath: checkpointInfo.originalPath,
+        restoredAt: new Date(),
+        restoredSizeBytes: restoreResult.sizeBytes,
+      };
+    } catch (error) {
+      await this.onError(`Failed to restore checkpoint: ${error instanceof Error ? error.message : String(error)}`);
+      throw error;
+    }
+  }
+
+  /**
+   * List all available checkpoints for this container
+   * 
+   * @returns Promise<CheckpointInfo[]> array of checkpoint information
+   */
+  public async listCheckpoints(): Promise<CheckpointInfo[]> {
+    const result = this.sql<{
+      checkpoint_id: string;
+      r2_path: string;
+      created_at: number;
+      size_bytes: number;
+      original_path: string;
+    }>`
+      SELECT * FROM container_checkpoints 
+      WHERE container_id = ${this.ctx.id.toString()}
+      ORDER BY created_at DESC
+    `;
+
+    return result
+      .map(row => ({
+        checkpointId: row.checkpoint_id,
+        r2Path: row.r2_path,
+        createdAt: new Date(row.created_at),
+        expiresAt: new Date(row.created_at + (14 * 24 * 60 * 60 * 1000)), // 2 weeks
+        sizeBytes: row.size_bytes,
+        originalPath: row.original_path,
+      }))
+      .filter(checkpoint => new Date() <= checkpoint.expiresAt); // Filter out expired
+  }
+
+  /**
+   * Delete a specific checkpoint
+   * 
+   * @param checkpointId - ID of the checkpoint to delete
+   * @returns Promise<boolean> true if deleted, false if not found
+   */
+  public async deleteCheckpoint(checkpointId: string): Promise<boolean> {
+    const checkpointInfo = await this.getCheckpointInfo(checkpointId);
+    if (!checkpointInfo) {
+      return false;
+    }
+
+    try {
+      // Delete from R2 (via container command)
+      await this.executeDeleteCheckpointCommand(checkpointInfo.r2Path);
+      
+      // Remove from database
+      this.sql`DELETE FROM container_checkpoints WHERE checkpoint_id = ${checkpointId}`;
+
+      return true;
+    } catch (error) {
+      console.error(`Failed to delete checkpoint ${checkpointId}:`, error);
+      return false;
+    }
+  }
+
+  /**
+   * Clean up expired checkpoints
+   * This method removes checkpoints older than 2 weeks
+   */
+  public async cleanupExpiredCheckpoints(): Promise<number> {
+    const twoWeeksAgo = Date.now() - (14 * 24 * 60 * 60 * 1000);
+    
+    const expiredCheckpoints = this.sql<{
+      checkpoint_id: string;
+      r2_path: string;
+    }>`
+      SELECT checkpoint_id, r2_path FROM container_checkpoints 
+      WHERE container_id = ${this.ctx.id.toString()}
+      AND created_at < ${twoWeeksAgo}
+    `;
+
+    let deletedCount = 0;
+    for (const checkpoint of expiredCheckpoints) {
+      try {
+        await this.executeDeleteCheckpointCommand(checkpoint.r2_path);
+        this.sql`DELETE FROM container_checkpoints WHERE checkpoint_id = ${checkpoint.checkpoint_id}`;
+        deletedCount++;
+      } catch (error) {
+        console.error(`Failed to delete expired checkpoint ${checkpoint.checkpoint_id}:`, error);
+      }
+    }
+
+    return deletedCount;
   }
 
   // ==================
@@ -1291,5 +1548,191 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
   private isActivityExpired(): boolean {
     return this.sleepAfterMs <= Date.now();
+  }
+
+  // ===============================
+  //     CHECKPOINT HELPER METHODS
+  // ===============================
+
+  /**
+   * Get the container name for checkpoint organization
+   */
+  private getContainerName(): string {
+    // Use the DO class name as container name
+    return this.constructor.name;
+  }
+
+  /**
+   * Wait for container to stop completely
+   */
+  private async waitForStop(timeoutMs: number = 30000): Promise<void> {
+    const startTime = Date.now();
+    while (this.container.running && (Date.now() - startTime) < timeoutMs) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    if (this.container.running) {
+      throw new Error('Container did not stop within timeout');
+    }
+  }
+
+  /**
+   * Store checkpoint metadata in the database
+   */
+  private async storeCheckpointMetadata(metadata: {
+    checkpointId: string;
+    r2Path: string;
+    createdAt: Date;
+    sizeBytes: number;
+    originalPath: string;
+  }): Promise<void> {
+    this.sql`
+      INSERT INTO container_checkpoints (
+        checkpoint_id, container_id, container_name, r2_path, 
+        created_at, size_bytes, original_path
+      ) VALUES (
+        ${metadata.checkpointId}, 
+        ${this.ctx.id.toString()}, 
+        ${this.getContainerName()}, 
+        ${metadata.r2Path}, 
+        ${metadata.createdAt.getTime()}, 
+        ${metadata.sizeBytes}, 
+        ${metadata.originalPath}
+      )
+    `;
+  }
+
+  /**
+   * Get checkpoint information from database
+   */
+  private async getCheckpointInfo(checkpointId: string): Promise<CheckpointInfo | null> {
+    const result = this.sql<{
+      checkpoint_id: string;
+      r2_path: string;
+      created_at: number;
+      size_bytes: number;
+      original_path: string;
+    }>`
+      SELECT * FROM container_checkpoints 
+      WHERE checkpoint_id = ${checkpointId} AND container_id = ${this.ctx.id.toString()}
+      LIMIT 1
+    `;
+
+    if (result.length === 0) {
+      return null;
+    }
+
+    const row = result[0];
+    return {
+      checkpointId: row.checkpoint_id,
+      r2Path: row.r2_path,
+      createdAt: new Date(row.created_at),
+      expiresAt: new Date(row.created_at + (14 * 24 * 60 * 60 * 1000)), // 2 weeks
+      sizeBytes: row.size_bytes,
+      originalPath: row.original_path,
+    };
+  }
+
+  /**
+   * Execute checkpoint command in the container
+   */
+  private async executeCheckpointCommand(
+    sourcePath: string, 
+    r2Path: string, 
+    timeoutSeconds: number
+  ): Promise<{ sizeBytes: number }> {
+    const state = await this.getState();
+    if (state.status !== 'healthy' && state.status !== 'running') {
+      throw new Error('Container must be running to execute checkpoint command');
+    }
+
+    try {
+      // Use the /__checkpoint endpoint that containers can implement
+      const response = await this.containerFetch('/__checkpoint', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourcePath,
+          r2Path,
+          timeoutSeconds,
+        }),
+        signal: AbortSignal.timeout(timeoutSeconds * 1000),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Checkpoint failed: ${response.status} ${response.statusText}`);
+      }
+
+      const result = await response.json() as { sizeBytes: number };
+      return result;
+    } catch (error) {
+      if (error instanceof Error && error.name === 'TimeoutError') {
+        throw new Error(`Checkpoint operation timed out after ${timeoutSeconds} seconds`);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Execute restore command in the container
+   */
+  private async executeRestoreCommand(
+    r2Path: string,
+    targetPath: string,
+    timeoutSeconds: number
+  ): Promise<{ sizeBytes: number }> {
+    const state = await this.getState();
+    if (state.status !== 'healthy' && state.status !== 'running') {
+      throw new Error('Container must be running to execute restore command');
+    }
+
+    try {
+      // Use the /__restore endpoint that containers can implement
+      const response = await this.containerFetch('/__restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          r2Path,
+          targetPath,
+          timeoutSeconds,
+        }),
+        signal: AbortSignal.timeout(timeoutSeconds * 1000),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Restore failed: ${response.status} ${response.statusText}`);
+      }
+
+      const result = await response.json() as { sizeBytes: number };
+      return result;
+    } catch (error) {
+      if (error instanceof Error && error.name === 'TimeoutError') {
+        throw new Error(`Restore operation timed out after ${timeoutSeconds} seconds`);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Execute delete checkpoint command in the container
+   */
+  private async executeDeleteCheckpointCommand(r2Path: string): Promise<void> {
+    try {
+      // Use the /__delete-checkpoint endpoint that containers can implement
+      const response = await this.containerFetch('/__delete-checkpoint', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ r2Path }),
+        signal: AbortSignal.timeout(30000), // 30 second timeout
+      });
+
+      if (!response.ok) {
+        throw new Error(`Delete checkpoint failed: ${response.status} ${response.statusText}`);
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name === 'TimeoutError') {
+        throw new Error('Delete checkpoint operation timed out after 30 seconds');
+      }
+      throw error;
+    }
   }
 }
