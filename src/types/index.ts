@@ -81,6 +81,36 @@ export interface WaitOptions {
 }
 
 /**
+ * Options for container exec operations
+ */
+export interface ExecOptions {
+  /** Working directory for the command */
+  workingDirectory?: string;
+  /** Environment variables for the command */
+  env?: Record<string, string>;
+  /** Timeout for the command execution in milliseconds */
+  timeout?: number;
+  /** AbortSignal to cancel the command */
+  signal?: AbortSignal;
+}
+
+/**
+ * Result of a container exec operation
+ */
+export interface ExecResult {
+  /** Exit code of the executed command */
+  exitCode: number;
+  /** Standard output from the command */
+  stdout: string;
+  /** Standard error from the command */
+  stderr: string;
+  /** Whether the command completed successfully (exitCode === 0) */
+  success: boolean;
+  /** Duration of command execution in milliseconds */
+  duration: number;
+}
+
+/**
  * Represents a scheduled task within a Container
  * @template T Type of the payload data
  */

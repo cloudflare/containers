@@ -9,6 +9,8 @@ import type {
   WaitOptions,
   CancellationOptions,
   StartAndWaitForPortsOptions,
+  ExecOptions,
+  ExecResult,
 } from '../types';
 import { generateId, parseTimeExpression } from './helpers';
 import { DurableObject } from 'cloudflare:workers';
@@ -542,6 +544,121 @@ export class Container<Env = unknown> extends DurableObject<Env> {
    */
   public async destroy(): Promise<void> {
     await this.container.destroy();
+  }
+
+  /**
+   * Execute a command in the running container
+   * 
+   * This method automatically starts the container if it's not running and waits for it to be healthy.
+   * The command is executed via HTTP communication to a special exec endpoint in the container.
+   * 
+   * @param command - Command string or array of command parts to execute
+   * @param options - Optional configuration for the command execution
+   * @returns Promise resolving to the execution result with stdout, stderr, exit code, etc.
+   * 
+   * @example
+   * ```typescript
+   * // Simple command execution
+   * const result = await container.exec('echo "Hello World"');
+   * console.log(result.stdout); // "Hello World"
+   * 
+   * // Command with options
+   * const result = await container.exec(['ls', '-la'], {
+   *   workingDirectory: '/app',
+   *   env: { NODE_ENV: 'production' },
+   *   timeout: 5000
+   * });
+   * ```
+   */
+  public async exec(command: string | string[], options?: ExecOptions): Promise<ExecResult> {
+    const startTime = Date.now();
+    
+    // Ensure container is running and healthy
+    const port = this.defaultPort || 8080;
+    await this.startAndWaitForPorts({
+      ports: port,
+      cancellationOptions: { abort: options?.signal }
+    });
+
+    // Prepare exec request payload
+    const execPayload = {
+      command: Array.isArray(command) ? command : ['/bin/sh', '-c', command],
+      workingDirectory: options?.workingDirectory,
+      env: options?.env,
+      timeout: options?.timeout || 30000, // Default 30 second timeout
+    };
+
+    try {
+      const tcpPort = this.container.getTcpPort(port);
+      
+      // Create timeout signal if specified
+      const timeoutMs = options?.timeout || 30000;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      
+      // Combine user signal with timeout signal
+      const signals = [controller.signal];
+      if (options?.signal) {
+        signals.push(options.signal);
+      }
+      
+      // Use first signal that fires
+      const combinedSignal = signals.length === 1 ? signals[0] : 
+        AbortSignal.any ? AbortSignal.any(signals) : controller.signal;
+
+      // Make HTTP request to container's exec endpoint
+      const response = await tcpPort.fetch('http://container/__exec', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(execPayload),
+        signal: combinedSignal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new Error(`Exec request failed: ${response.status} ${response.statusText}`);
+      }
+
+      const result = await response.json() as {
+        exitCode: number;
+        stdout: string;
+        stderr: string;
+        duration: number;
+      };
+
+      return {
+        exitCode: result.exitCode,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        success: result.exitCode === 0,
+        duration: Date.now() - startTime,
+      };
+
+    } catch (error) {
+      // Handle timeout and other errors
+      if (error instanceof Error && error.name === 'AbortError') {
+        return {
+          exitCode: 124, // Standard timeout exit code
+          stdout: '',
+          stderr: 'Command timed out',
+          success: false,
+          duration: Date.now() - startTime,
+        };
+      }
+
+      // Handle container communication errors
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return {
+        exitCode: 1,
+        stdout: '',
+        stderr: `Exec failed: ${errorMessage}`,
+        success: false,
+        duration: Date.now() - startTime,
+      };
+    }
   }
 
   /**

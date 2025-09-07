@@ -313,3 +313,244 @@ describe('getRandom', () => {
     expect(result).toEqual({ mockStub: true });
   });
 });
+
+// Container Exec Tests
+describe('Container Exec', () => {
+  let mockCtx: any;
+  let container: Container;
+
+  beforeEach(() => {
+    // Create a mock context with necessary container methods
+    mockCtx = {
+      storage: {
+        sql: {
+          exec: jest.fn().mockReturnValue([]),
+        },
+        put: jest.fn().mockResolvedValue(undefined),
+        get: jest.fn().mockResolvedValue(undefined),
+        setAlarm: jest.fn().mockResolvedValue(undefined),
+        deleteAlarm: jest.fn().mockResolvedValue(undefined),
+        sync: jest.fn().mockResolvedValue(undefined),
+      },
+      blockConcurrencyWhile: jest.fn(fn => fn()),
+      container: {
+        running: true,
+        start: jest.fn(),
+        destroy: jest.fn(),
+        monitor: jest.fn().mockReturnValue(Promise.resolve()),
+        getTcpPort: jest.fn().mockReturnValue({
+          fetch: jest.fn(),
+        }),
+      },
+    };
+
+    // @ts-ignore - ignore TypeScript errors for testing
+    container = new Container(mockCtx, {}, { defaultPort: 8080 });
+  });
+
+  test('should execute simple string command successfully', async () => {
+    const mockExecResponse = {
+      ok: true,
+      json: jest.fn().mockResolvedValue({
+        exitCode: 0,
+        stdout: 'Hello World\n',
+        stderr: '',
+        duration: 100,
+      }),
+    };
+
+    mockCtx.container.getTcpPort().fetch.mockResolvedValue(mockExecResponse);
+
+    const result = await container.exec('echo "Hello World"');
+
+    expect(result.success).toBe(true);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('Hello World\n');
+    expect(result.stderr).toBe('');
+    expect(mockCtx.container.getTcpPort().fetch).toHaveBeenCalledWith(
+      'http://container/__exec',
+      expect.objectContaining({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          command: ['/bin/sh', '-c', 'echo "Hello World"'],
+          workingDirectory: undefined,
+          env: undefined,
+          timeout: 30000,
+        }),
+      })
+    );
+  });
+
+  test('should execute array command successfully', async () => {
+    const mockExecResponse = {
+      ok: true,
+      json: jest.fn().mockResolvedValue({
+        exitCode: 0,
+        stdout: 'file1.txt\nfile2.txt\n',
+        stderr: '',
+        duration: 150,
+      }),
+    };
+
+    mockCtx.container.getTcpPort().fetch.mockResolvedValue(mockExecResponse);
+
+    const result = await container.exec(['ls', '-la']);
+
+    expect(result.success).toBe(true);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('file1.txt\nfile2.txt\n');
+    expect(mockCtx.container.getTcpPort().fetch).toHaveBeenCalledWith(
+      'http://container/__exec',
+      expect.objectContaining({
+        body: JSON.stringify({
+          command: ['ls', '-la'],
+          workingDirectory: undefined,
+          env: undefined,
+          timeout: 30000,
+        }),
+      })
+    );
+  });
+
+  test('should execute command with options', async () => {
+    const mockExecResponse = {
+      ok: true,
+      json: jest.fn().mockResolvedValue({
+        exitCode: 0,
+        stdout: 'production environment\n',
+        stderr: '',
+        duration: 200,
+      }),
+    };
+
+    mockCtx.container.getTcpPort().fetch.mockResolvedValue(mockExecResponse);
+
+    const result = await container.exec('echo $NODE_ENV', {
+      workingDirectory: '/app',
+      env: { NODE_ENV: 'production' },
+      timeout: 5000,
+    });
+
+    expect(result.success).toBe(true);
+    expect(mockCtx.container.getTcpPort().fetch).toHaveBeenCalledWith(
+      'http://container/__exec',
+      expect.objectContaining({
+        body: JSON.stringify({
+          command: ['/bin/sh', '-c', 'echo $NODE_ENV'],
+          workingDirectory: '/app',
+          env: { NODE_ENV: 'production' },
+          timeout: 5000,
+        }),
+      })
+    );
+  });
+
+  test('should handle command execution failure', async () => {
+    const mockExecResponse = {
+      ok: true,
+      json: jest.fn().mockResolvedValue({
+        exitCode: 1,
+        stdout: '',
+        stderr: 'command not found: nonexistentcommand\n',
+        duration: 50,
+      }),
+    };
+
+    mockCtx.container.getTcpPort().fetch.mockResolvedValue(mockExecResponse);
+
+    const result = await container.exec('nonexistentcommand');
+
+    expect(result.success).toBe(false);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toBe('command not found: nonexistentcommand\n');
+  });
+
+  test('should handle HTTP request failure', async () => {
+    mockCtx.container.getTcpPort().fetch.mockResolvedValue({
+      ok: false,
+      status: 500,
+      statusText: 'Internal Server Error',
+    });
+
+    const result = await container.exec('echo test');
+
+    expect(result.success).toBe(false);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Exec failed: Exec request failed: 500 Internal Server Error');
+  });
+
+  test('should handle network/connection errors', async () => {
+    mockCtx.container.getTcpPort().fetch.mockRejectedValue(new Error('Connection refused'));
+
+    const result = await container.exec('echo test');
+
+    expect(result.success).toBe(false);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe('Exec failed: Connection refused');
+  });
+
+  test('should handle timeout', async () => {
+    // Mock a slow response that will be aborted
+    mockCtx.container.getTcpPort().fetch.mockImplementation(() => 
+      new Promise((resolve) => {
+        setTimeout(resolve, 10000); // 10 second delay
+      })
+    );
+
+    const result = await container.exec('sleep 10', { timeout: 100 });
+
+    expect(result.success).toBe(false);
+    expect(result.exitCode).toBe(124); // Standard timeout exit code
+    expect(result.stderr).toBe('Command timed out');
+  });
+
+  test('should handle abort signal', async () => {
+    const controller = new AbortController();
+    
+    // Mock a slow response
+    mockCtx.container.getTcpPort().fetch.mockImplementation(() => 
+      new Promise((resolve, reject) => {
+        setTimeout(() => reject(new DOMException('Aborted', 'AbortError')), 1000);
+      })
+    );
+
+    // Abort after a short delay
+    setTimeout(() => controller.abort(), 50);
+
+    const result = await container.exec('sleep 5', { signal: controller.signal });
+
+    expect(result.success).toBe(false);
+    expect(result.exitCode).toBe(124);
+    expect(result.stderr).toBe('Command timed out');
+  });
+
+  test('should start container if not running', async () => {
+    // Mock container as not running initially
+    mockCtx.container.running = false;
+
+    const mockExecResponse = {
+      ok: true,
+      json: jest.fn().mockResolvedValue({
+        exitCode: 0,
+        stdout: 'test output\n',
+        stderr: '',
+        duration: 100,
+      }),
+    };
+
+    mockCtx.container.getTcpPort().fetch.mockResolvedValue(mockExecResponse);
+
+    // Mock startAndWaitForPorts to start the container
+    const startSpy = jest.spyOn(container, 'startAndWaitForPorts').mockResolvedValue();
+
+    const result = await container.exec('echo test');
+
+    expect(startSpy).toHaveBeenCalledWith({
+      ports: 8080,
+      cancellationOptions: { abort: undefined }
+    });
+    expect(result.success).toBe(true);
+  });
+});
