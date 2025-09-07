@@ -233,6 +233,13 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   entrypoint: ContainerStartOptions['entrypoint'];
   enableInternet: ContainerStartOptions['enableInternet'] = true;
 
+  // R2 bucket bindings configuration
+  // Set this property directly to configure R2 bucket API access
+  r2Bindings: Array<{
+    binding: string;
+    bucketName: string;
+  }> = [];
+
   // =========================
   //     PUBLIC INTERFACE
   // =========================
@@ -261,6 +268,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     if (options) {
       if (options.defaultPort !== undefined) this.defaultPort = options.defaultPort;
       if (options.sleepAfter !== undefined) this.sleepAfter = options.sleepAfter;
+      if (options.r2Bindings) this.r2Bindings = [...options.r2Bindings];
     }
 
     // Create schedules table if it doesn't exist
@@ -290,9 +298,112 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     return { ...(await this.state.getState()) };
   }
 
-  // ==========================
-  //     CONTAINER STARTING
-  // ==========================
+
+  /**
+   * Setup R2 bindings as environment variables for the container
+   * This creates environment variables that the container can use to access R2 buckets via API
+   * @private
+   */
+  private setupR2BindingEnvironment(): Record<string, string> {
+    const r2EnvVars: Record<string, string> = {};
+    for (const binding of this.r2Bindings) {
+      const envPrefix = binding.binding.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+      r2EnvVars[`R2_${envPrefix}_BINDING`] = binding.binding;
+      r2EnvVars[`R2_${envPrefix}_BUCKET`] = binding.bucketName;
+    }
+    return r2EnvVars;
+  }
+
+  /**
+   * Get detailed information about configured R2 bindings
+   */
+  public getR2BindingInfo(): Record<string, { binding: string; bucketName: string; envVars: Record<string, string> }> {
+    const bindingInfo: Record<string, any> = {};
+    
+    for (const binding of this.r2Bindings) {
+      const envPrefix = binding.binding.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+      bindingInfo[binding.binding] = {
+        binding: binding.binding,
+        bucketName: binding.bucketName,
+        envVars: {
+          [`R2_${envPrefix}_BINDING`]: binding.binding,
+          [`R2_${envPrefix}_BUCKET`]: binding.bucketName
+        }
+      };
+    }
+    
+    return bindingInfo;
+  }
+
+  /**
+   * Validate that R2 binding environment variables are properly configured
+   */
+  public validateR2BindingEnvironment(): { valid: boolean; bindings: Record<string, any>; errors: string[] } {
+    const errors: string[] = [];
+    const bindings: Record<string, any> = {};
+    
+    // Parse environment variables for R2 bindings
+    const r2Vars: Record<string, string> = {};
+    if (typeof process !== 'undefined' && process.env) {
+      Object.keys(process.env).forEach(key => {
+        if (key.startsWith('R2_')) {
+          r2Vars[key] = process.env[key] || '';
+        }
+      });
+    }
+
+    // Group by binding name
+    Object.keys(r2Vars).forEach(key => {
+      const parts = key.split('_');
+      if (parts.length >= 3) {
+        const bindingName = parts[1];
+        const property = parts.slice(2).join('_');
+        
+        if (!bindings[bindingName]) {
+          bindings[bindingName] = {};
+        }
+        bindings[bindingName][property] = r2Vars[key];
+      }
+    });
+
+    // Validate each configured R2 binding
+    for (const binding of this.r2Bindings) {
+      const envPrefix = binding.binding.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+      const expectedBindingVar = `R2_${envPrefix}_BINDING`;
+      const expectedBucketVar = `R2_${envPrefix}_BUCKET`;
+
+      if (!r2Vars[expectedBindingVar]) {
+        errors.push(`Missing environment variable: ${expectedBindingVar}`);
+      } else if (r2Vars[expectedBindingVar] !== binding.binding) {
+        errors.push(`Environment variable ${expectedBindingVar} has incorrect value: expected ${binding.binding}, got ${r2Vars[expectedBindingVar]}`);
+      }
+
+      if (!r2Vars[expectedBucketVar]) {
+        errors.push(`Missing environment variable: ${expectedBucketVar}`);
+      } else if (r2Vars[expectedBucketVar] !== binding.bucketName) {
+        errors.push(`Environment variable ${expectedBucketVar} has incorrect value: expected ${binding.bucketName}, got ${r2Vars[expectedBucketVar]}`);
+      }
+    }
+
+    return {
+      valid: errors.length === 0,
+      bindings,
+      errors
+    };
+  }
+
+  /**
+   * Get a summary of R2 binding configuration for logging/debugging
+   */
+  public getR2BindingSummary(): { configured: number; bindings: Array<{ name: string; bucket: string }> } {
+    return {
+      configured: this.r2Bindings.length,
+      bindings: this.r2Bindings.map(binding => ({
+        name: binding.binding,
+        bucket: binding.bucketName
+      }))
+    };
+  }
 
   /**
    * Start the container if it's not running and set up monitoring
@@ -903,7 +1014,10 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     await this.state.setRunning();
     for (let tries = 0; tries < waitOptions.retries; tries++) {
       // Use provided options or fall back to instance properties
-      const envVars = options?.envVars ?? this.envVars;
+      const baseEnvVars = options?.envVars ?? this.envVars;
+      const r2EnvVars = this.setupR2BindingEnvironment();
+      // Merge base environment variables with R2 binding variables
+      const envVars = { ...baseEnvVars, ...r2EnvVars };
       const entrypoint = options?.entrypoint ?? this.entrypoint;
       const enableInternet = options?.enableInternet ?? this.enableInternet;
 

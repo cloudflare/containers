@@ -47,6 +47,11 @@ describe('Container', () => {
         sql: {
           exec: jest.fn().mockReturnValue([]),
         },
+        put: jest.fn().mockResolvedValue(undefined),
+        get: jest.fn().mockResolvedValue(null),
+        delete: jest.fn().mockResolvedValue(undefined),
+        setAlarm: jest.fn().mockResolvedValue(undefined),
+        sync: jest.fn().mockResolvedValue(undefined),
       },
       blockConcurrencyWhile: jest.fn(fn => fn()),
       container: {
@@ -296,20 +301,153 @@ describe('Container', () => {
     // containerFetch should be called with the request and default port
     expect(proxySpy).toHaveBeenCalledWith(mockRequest, container.defaultPort);
   });
-});
 
-// Create load balance tests
-describe('getRandom', () => {
-  test('should return a container stub', async () => {
-    const mockBinding = {
-      idFromString: jest.fn().mockReturnValue('mock-id'),
-      get: jest.fn().mockReturnValue({ mockStub: true }),
-    };
+  // R2 bindings tests
+  describe('R2 Bindings', () => {
+    test('should initialize with r2Bindings from constructor options', () => {
+      const r2Bindings = [
+        { binding: 'TEST_BUCKET', bucketName: 'test-bucket' },
+        { binding: 'DATA_BUCKET', bucketName: 'data-bucket' }
+      ];
 
-    const result = await getRandom(mockBinding as any, 5);
+      // @ts-ignore - ignore TypeScript errors for testing
+      const containerWithR2 = new Container(mockCtx, { r2Bindings });
+      (containerWithR2 as any).ctx = mockCtx;
 
-    expect(mockBinding.idFromString).toHaveBeenCalled();
-    expect(mockBinding.get).toHaveBeenCalledWith('mock-id');
-    expect(result).toEqual({ mockStub: true });
+      expect(containerWithR2.r2Bindings).toEqual(r2Bindings);
+    });
+
+    test('should generate correct R2 environment variables', () => {
+      const r2Bindings = [
+        { binding: 'TEST_BUCKET', bucketName: 'test-bucket' },
+        { binding: 'DATA_BUCKET', bucketName: 'data-bucket' }
+      ];
+
+      container.r2Bindings = r2Bindings;
+
+      // @ts-ignore - accessing private method for testing
+      const envVars = container.setupR2BindingEnvironment();
+
+      expect(envVars).toEqual({
+        'R2_TEST_BUCKET_BINDING': 'TEST_BUCKET',
+        'R2_TEST_BUCKET_BUCKET': 'test-bucket',
+        'R2_DATA_BUCKET_BINDING': 'DATA_BUCKET',
+        'R2_DATA_BUCKET_BUCKET': 'data-bucket'
+      });
+    });
+
+    test('should handle binding names with special characters in environment variables', () => {
+      const r2Bindings = [
+        { binding: 'test-bucket-with-dashes', bucketName: 'test-bucket-name' },
+        { binding: 'my.binding.name', bucketName: 'my-bucket-name' }
+      ];
+
+      container.r2Bindings = r2Bindings;
+
+      // @ts-ignore - accessing private method for testing
+      const envVars = container.setupR2BindingEnvironment();
+
+      expect(envVars).toEqual({
+        'R2_TEST_BUCKET_WITH_DASHES_BINDING': 'test-bucket-with-dashes',
+        'R2_TEST_BUCKET_WITH_DASHES_BUCKET': 'test-bucket-name',
+        'R2_MY_BINDING_NAME_BINDING': 'my.binding.name',
+        'R2_MY_BINDING_NAME_BUCKET': 'my-bucket-name'
+      });
+    });
+
+    test('should merge R2 environment variables with existing environment variables', () => {
+      const r2Bindings = [
+        { binding: 'TEST_BUCKET', bucketName: 'test-bucket' }
+      ];
+
+      container.r2Bindings = r2Bindings;
+
+      const existingEnvVars = { 'EXISTING_VAR': 'value' };
+      container.envVars = existingEnvVars;
+
+      // @ts-ignore - accessing private method for testing
+      const r2EnvVars = container.setupR2BindingEnvironment();
+      const mergedEnvVars = { ...existingEnvVars, ...r2EnvVars };
+
+      expect(mergedEnvVars).toEqual({
+        'EXISTING_VAR': 'value',
+        'R2_TEST_BUCKET_BINDING': 'TEST_BUCKET',
+        'R2_TEST_BUCKET_BUCKET': 'test-bucket'
+      });
+    });
+
+    test('should handle empty r2Bindings array', () => {
+      container.r2Bindings = [];
+
+      // @ts-ignore - accessing private method for testing
+      const envVars = container.setupR2BindingEnvironment();
+
+      expect(envVars).toEqual({});
+    });
+
+    test('should provide R2 binding info via getR2BindingInfo', () => {
+      const r2Bindings = [
+        { binding: 'DATA_BUCKET', bucketName: 'data-bucket' },
+        { binding: 'LOGS_BUCKET', bucketName: 'logs-bucket' }
+      ];
+
+      container.r2Bindings = r2Bindings;
+
+      const bindingInfo = container.getR2BindingInfo();
+
+      expect(bindingInfo).toEqual({
+        'DATA_BUCKET': {
+          binding: 'DATA_BUCKET',
+          bucketName: 'data-bucket',
+          envVars: {
+            'R2_DATA_BUCKET_BINDING': 'DATA_BUCKET',
+            'R2_DATA_BUCKET_BUCKET': 'data-bucket'
+          }
+        },
+        'LOGS_BUCKET': {
+          binding: 'LOGS_BUCKET',
+          bucketName: 'logs-bucket',
+          envVars: {
+            'R2_LOGS_BUCKET_BINDING': 'LOGS_BUCKET',
+            'R2_LOGS_BUCKET_BUCKET': 'logs-bucket'
+          }
+        }
+      });
+    });
+
+    test('should provide R2 binding summary via getR2BindingSummary', () => {
+      const r2Bindings = [
+        { binding: 'DATA_BUCKET', bucketName: 'data-bucket' },
+        { binding: 'LOGS_BUCKET', bucketName: 'logs-bucket' }
+      ];
+
+      container.r2Bindings = r2Bindings;
+
+      const summary = container.getR2BindingSummary();
+
+      expect(summary).toEqual({
+        configured: 2,
+        bindings: [
+          { name: 'DATA_BUCKET', bucket: 'data-bucket' },
+          { name: 'LOGS_BUCKET', bucket: 'logs-bucket' }
+        ]
+      });
+    });
+  });
+
+  // Create load balance tests
+  describe('getRandom', () => {
+    test('should return a container stub', async () => {
+      const mockBinding = {
+        idFromString: jest.fn().mockReturnValue('mock-id'),
+        get: jest.fn().mockReturnValue({ mockStub: true }),
+      };
+
+      const result = await getRandom(mockBinding as any, 5);
+
+      expect(mockBinding.idFromString).toHaveBeenCalled();
+      expect(mockBinding.get).toHaveBeenCalledWith('mock-id');
+      expect(result).toEqual({ mockStub: true });
+    });
   });
 });
