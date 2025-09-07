@@ -21,6 +21,18 @@ export interface ContainerMessage<T = unknown> {
 // Container state interface removed
 
 /**
+ * Configuration for KV namespace bindings
+ */
+export interface KvBinding {
+  /** Name of the KV binding (used in environment variables) */
+  binding: string;
+  /** Name of the KV namespace */
+  namespaceName: string;
+  /** Optional preview namespace for development */
+  preview?: string;
+}
+
+/**
  * Options for container configuration
  */
 export interface ContainerOptions {
@@ -41,6 +53,9 @@ export interface ContainerOptions {
 
   /** Whether to enable internet access for the container */
   enableInternet?: boolean;
+
+  /** KV namespace bindings configuration */
+  kvBindings?: KvBinding[];
 }
 
 /**

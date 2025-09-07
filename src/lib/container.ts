@@ -9,6 +9,7 @@ import type {
   WaitOptions,
   CancellationOptions,
   StartAndWaitForPortsOptions,
+  KvBinding,
 } from '../types';
 import { generateId, parseTimeExpression } from './helpers';
 import { DurableObject } from 'cloudflare:workers';
@@ -233,6 +234,9 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   entrypoint: ContainerStartOptions['entrypoint'];
   enableInternet: ContainerStartOptions['enableInternet'] = true;
 
+  // KV namespace bindings for container applications
+  kvBindings: KvBinding[] = [];
+
   // =========================
   //     PUBLIC INTERFACE
   // =========================
@@ -261,6 +265,12 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     if (options) {
       if (options.defaultPort !== undefined) this.defaultPort = options.defaultPort;
       if (options.sleepAfter !== undefined) this.sleepAfter = options.sleepAfter;
+      if (options.kvBindings !== undefined) this.kvBindings = options.kvBindings;
+    }
+
+    // Auto-detect KV bindings from environment if not explicitly provided
+    if (this.kvBindings.length === 0) {
+      this.kvBindings = this.autoDetectKvBindings(env);
     }
 
     // Create schedules table if it doesn't exist
@@ -903,16 +913,20 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     await this.state.setRunning();
     for (let tries = 0; tries < waitOptions.retries; tries++) {
       // Use provided options or fall back to instance properties
-      const envVars = options?.envVars ?? this.envVars;
+      const baseEnvVars = options?.envVars ?? this.envVars;
       const entrypoint = options?.entrypoint ?? this.entrypoint;
       const enableInternet = options?.enableInternet ?? this.enableInternet;
+
+      // Generate KV binding environment variables and merge with existing env vars
+      const kvEnvVars = this.setupKvBindingEnvironment();
+      const mergedEnvVars = { ...baseEnvVars, ...kvEnvVars };
 
       // Only include properties that are defined
       const startConfig: ContainerStartOptions = {
         enableInternet,
       };
 
-      if (envVars && Object.keys(envVars).length > 0) startConfig.env = envVars;
+      if (mergedEnvVars && Object.keys(mergedEnvVars).length > 0) startConfig.env = mergedEnvVars;
       if (entrypoint) startConfig.entrypoint = entrypoint;
 
       this.renewActivityTimeout();
@@ -1291,5 +1305,152 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
   private isActivityExpired(): boolean {
     return this.sleepAfterMs <= Date.now();
+  }
+
+  // ==========================
+  //     KV BINDING HELPERS
+  // ==========================
+
+  /**
+   * Generate environment variables for KV bindings
+   * Creates KV_{BINDING_NAME}_BINDING and KV_{BINDING_NAME}_NAMESPACE environment variables
+   * @private
+   */
+  private setupKvBindingEnvironment(): Record<string, string> {
+    const kvEnvVars: Record<string, string> = {};
+    for (const binding of this.kvBindings) {
+      const envPrefix = binding.binding.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+      kvEnvVars[`KV_${envPrefix}_BINDING`] = binding.binding;
+      kvEnvVars[`KV_${envPrefix}_NAMESPACE`] = binding.namespaceName;
+      if (binding.preview) {
+        kvEnvVars[`KV_${envPrefix}_PREVIEW`] = binding.preview;
+      }
+    }
+    return kvEnvVars;
+  }
+
+  /**
+   * Get detailed information about configured KV bindings
+   * @public
+   */
+  public getKvBindingInfo(): Record<string, { binding: string; namespaceName: string; preview?: string; envVars: Record<string, string> }> {
+    const bindingInfo: Record<string, any> = {};
+    for (const binding of this.kvBindings) {
+      const envPrefix = binding.binding.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+      const envVars: Record<string, string> = {
+        [`KV_${envPrefix}_BINDING`]: binding.binding,
+        [`KV_${envPrefix}_NAMESPACE`]: binding.namespaceName
+      };
+      if (binding.preview) {
+        envVars[`KV_${envPrefix}_PREVIEW`] = binding.preview;
+      }
+      
+      bindingInfo[binding.binding] = {
+        binding: binding.binding,
+        namespaceName: binding.namespaceName,
+        ...(binding.preview && { preview: binding.preview }),
+        envVars
+      };
+    }
+    return bindingInfo;
+  }
+
+  /**
+   * Validate KV binding environment variables are properly set
+   * @public
+   */
+  public validateKvBindingEnvironment(): { valid: boolean; bindings: Record<string, any>; errors: string[] } {
+    const errors: string[] = [];
+    const bindings: Record<string, any> = {};
+    
+    // Get all KV environment variables from process.env
+    const kvVars: Record<string, string> = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      if (key.startsWith('KV_') && value) {
+        kvVars[key] = value;
+      }
+    }
+    
+    // Group KV variables by binding name
+    const groupedBindings: Record<string, Record<string, string>> = {};
+    for (const [key, value] of Object.entries(kvVars)) {
+      const match = key.match(/^KV_([A-Z0-9_]+)_(BINDING|NAMESPACE|PREVIEW)$/);
+      if (match) {
+        const bindingName = match[1];
+        const varType = match[2];
+        if (!groupedBindings[bindingName]) {
+          groupedBindings[bindingName] = {};
+        }
+        groupedBindings[bindingName][varType] = value;
+      }
+    }
+    
+    // Check each configured binding
+    for (const binding of this.kvBindings) {
+      const envPrefix = binding.binding.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+      const foundBinding = groupedBindings[envPrefix];
+      
+      if (!foundBinding) {
+        errors.push(`KV binding '${binding.binding}' not found in environment variables`);
+        continue;
+      }
+      
+      if (!foundBinding.BINDING) {
+        errors.push(`KV_${envPrefix}_BINDING environment variable missing`);
+      }
+      
+      if (!foundBinding.NAMESPACE) {
+        errors.push(`KV_${envPrefix}_NAMESPACE environment variable missing`);
+      }
+      
+      bindings[binding.binding] = {
+        configured: binding,
+        environment: foundBinding,
+        valid: foundBinding.BINDING && foundBinding.NAMESPACE
+      };
+    }
+    
+    return {
+      valid: errors.length === 0,
+      bindings,
+      errors
+    };
+  }
+
+  /**
+   * Get a summary of KV bindings for logging and debugging
+   * @public
+   */
+  public getKvBindingSummary(): { configured: number; bindings: Array<{ name: string; namespace: string; preview?: string }> } {
+    return {
+      configured: this.kvBindings.length,
+      bindings: this.kvBindings.map(binding => ({
+        name: binding.binding,
+        namespace: binding.namespaceName,
+        ...(binding.preview && { preview: binding.preview })
+      }))
+    };
+  }
+
+  /**
+   * Auto-detect KV bindings from the environment
+   * @private
+   */
+  private autoDetectKvBindings(env: any): KvBinding[] {
+    const kvBindings: KvBinding[] = [];
+    
+    // Look for KV namespace properties in the environment
+    for (const [key, value] of Object.entries(env)) {
+      // Check if this property looks like a KV namespace binding
+      if (value && typeof value === 'object' && 'get' in value && 'put' in value && 'delete' in value) {
+        // This looks like a KV namespace - create a binding for it
+        kvBindings.push({
+          binding: key,
+          namespaceName: key.toLowerCase().replace(/_/g, '-')
+        });
+      }
+    }
+    
+    return kvBindings;
   }
 }

@@ -298,6 +298,292 @@ describe('Container', () => {
   });
 });
 
+  // KV Bindings tests
+  describe('KV Bindings', () => {
+    test('should initialize with kvBindings from constructor options', () => {
+      const kvBindings = [
+        { binding: 'DEMO_CACHE', namespaceName: 'demo-cache', preview: 'demo-cache-preview' },
+        { binding: 'USER_SESSIONS', namespaceName: 'user-sessions' }
+      ];
+
+      const containerWithKv = new Container(mockCtx, {}, { kvBindings });
+      // Add ctx property for testing
+      (containerWithKv as any).ctx = mockCtx;
+
+      expect(containerWithKv.kvBindings).toEqual(kvBindings);
+    });
+
+    test('should generate correct KV environment variables', () => {
+      const kvBindings = [
+        { binding: 'DEMO_CACHE', namespaceName: 'demo-cache', preview: 'demo-cache-preview' },
+        { binding: 'USER_SESSIONS', namespaceName: 'user-sessions' }
+      ];
+
+      container.kvBindings = kvBindings;
+
+      // @ts-ignore - accessing private method for testing
+      const envVars = container.setupKvBindingEnvironment();
+
+      expect(envVars).toEqual({
+        'KV_DEMO_CACHE_BINDING': 'DEMO_CACHE',
+        'KV_DEMO_CACHE_NAMESPACE': 'demo-cache',
+        'KV_DEMO_CACHE_PREVIEW': 'demo-cache-preview',
+        'KV_USER_SESSIONS_BINDING': 'USER_SESSIONS',
+        'KV_USER_SESSIONS_NAMESPACE': 'user-sessions'
+      });
+    });
+
+    test('should sanitize binding names for environment variables', () => {
+      const kvBindings = [
+        { binding: 'my-special-cache', namespaceName: 'special-cache' }
+      ];
+
+      container.kvBindings = kvBindings;
+
+      // @ts-ignore - accessing private method for testing
+      const envVars = container.setupKvBindingEnvironment();
+
+      expect(envVars).toEqual({
+        'KV_MY_SPECIAL_CACHE_BINDING': 'my-special-cache',
+        'KV_MY_SPECIAL_CACHE_NAMESPACE': 'special-cache'
+      });
+    });
+
+    test('should merge KV environment variables with existing env vars during container start', () => {
+      const kvBindings = [
+        { binding: 'TEST_KV', namespaceName: 'test-kv' }
+      ];
+
+      container.kvBindings = kvBindings;
+      container.envVars = { 'EXISTING_VAR': 'value' };
+
+      // Mock the container start process enough to test env var merging
+      const startOptions = undefined;
+
+      // Simulate the env var merging logic from startAndWaitForPorts
+      const baseEnvVars = startOptions?.envVars ?? container.envVars;
+      // @ts-ignore - accessing private method for testing
+      const kvEnvVars = container.setupKvBindingEnvironment();
+      const mergedEnvVars = { ...baseEnvVars, ...kvEnvVars };
+
+      expect(mergedEnvVars).toEqual({
+        'EXISTING_VAR': 'value',
+        'KV_TEST_KV_BINDING': 'TEST_KV',
+        'KV_TEST_KV_NAMESPACE': 'test-kv'
+      });
+    });
+
+    test('should handle empty kvBindings array', () => {
+      container.kvBindings = [];
+
+      // @ts-ignore - accessing private method for testing
+      const envVars = container.setupKvBindingEnvironment();
+
+      expect(envVars).toEqual({});
+    });
+
+    test('should provide KV binding info via getKvBindingInfo', () => {
+      const kvBindings = [
+        { binding: 'DEMO_CACHE', namespaceName: 'demo-cache', preview: 'demo-cache-preview' },
+        { binding: 'USER_SESSIONS', namespaceName: 'user-sessions' }
+      ];
+
+      container.kvBindings = kvBindings;
+
+      const bindingInfo = container.getKvBindingInfo();
+
+      expect(bindingInfo).toEqual({
+        'DEMO_CACHE': {
+          binding: 'DEMO_CACHE',
+          namespaceName: 'demo-cache',
+          preview: 'demo-cache-preview',
+          envVars: {
+            'KV_DEMO_CACHE_BINDING': 'DEMO_CACHE',
+            'KV_DEMO_CACHE_NAMESPACE': 'demo-cache',
+            'KV_DEMO_CACHE_PREVIEW': 'demo-cache-preview'
+          }
+        },
+        'USER_SESSIONS': {
+          binding: 'USER_SESSIONS',
+          namespaceName: 'user-sessions',
+          envVars: {
+            'KV_USER_SESSIONS_BINDING': 'USER_SESSIONS',
+            'KV_USER_SESSIONS_NAMESPACE': 'user-sessions'
+          }
+        }
+      });
+    });
+
+    test('should provide KV binding summary via getKvBindingSummary', () => {
+      const kvBindings = [
+        { binding: 'DEMO_CACHE', namespaceName: 'demo-cache', preview: 'demo-cache-preview' },
+        { binding: 'USER_SESSIONS', namespaceName: 'user-sessions' }
+      ];
+
+      container.kvBindings = kvBindings;
+
+      const summary = container.getKvBindingSummary();
+
+      expect(summary).toEqual({
+        configured: 2,
+        bindings: [
+          { name: 'DEMO_CACHE', namespace: 'demo-cache', preview: 'demo-cache-preview' },
+          { name: 'USER_SESSIONS', namespace: 'user-sessions' }
+        ]
+      });
+    });
+
+    test('should validate KV binding environment variables', () => {
+      const kvBindings = [
+        { binding: 'TEST_KV', namespaceName: 'test-kv' }
+      ];
+
+      container.kvBindings = kvBindings;
+
+      // Mock process.env for validation test
+      const originalEnv = process.env;
+      process.env = {
+        ...originalEnv,
+        'KV_TEST_KV_BINDING': 'TEST_KV',
+        'KV_TEST_KV_NAMESPACE': 'test-kv'
+      };
+
+      const validation = container.validateKvBindingEnvironment();
+
+      expect(validation.valid).toBe(true);
+      expect(validation.errors).toHaveLength(0);
+      expect(validation.bindings['TEST_KV']).toEqual({
+        configured: { binding: 'TEST_KV', namespaceName: 'test-kv' },
+        environment: {
+          BINDING: 'TEST_KV',
+          NAMESPACE: 'test-kv'
+        },
+        valid: true
+      });
+
+      // Restore original env
+      process.env = originalEnv;
+    });
+
+    test('should auto-detect KV bindings from environment', () => {
+      // Mock KV namespace objects
+      const mockKvNamespace1 = {
+        get: jest.fn(),
+        put: jest.fn(),
+        delete: jest.fn(),
+        list: jest.fn()
+      };
+
+      const mockKvNamespace2 = {
+        get: jest.fn(),
+        put: jest.fn(),
+        delete: jest.fn(),
+        list: jest.fn()
+      };
+
+      const mockEnv = {
+        DEMO_CACHE: mockKvNamespace1,
+        USER_SESSIONS: mockKvNamespace2,
+        NOT_A_KV: 'just a string',
+        ALSO_NOT_KV: { someProperty: 'value' }
+      };
+
+      // @ts-ignore - accessing private method for testing
+      const detectedBindings = container.autoDetectKvBindings(mockEnv);
+
+      expect(detectedBindings).toHaveLength(2);
+      expect(detectedBindings).toEqual([
+        { binding: 'DEMO_CACHE', namespaceName: 'demo-cache' },
+        { binding: 'USER_SESSIONS', namespaceName: 'user-sessions' }
+      ]);
+    });
+
+    test('should auto-detect KV bindings with underscore to dash conversion', () => {
+      const mockKvNamespace = {
+        get: jest.fn(),
+        put: jest.fn(), 
+        delete: jest.fn()
+      };
+
+      const mockEnv = {
+        MY_SPECIAL_CACHE: mockKvNamespace,
+        ANOTHER_KV_STORE: mockKvNamespace
+      };
+
+      // @ts-ignore - accessing private method for testing
+      const detectedBindings = container.autoDetectKvBindings(mockEnv);
+
+      expect(detectedBindings).toEqual([
+        { binding: 'MY_SPECIAL_CACHE', namespaceName: 'my-special-cache' },
+        { binding: 'ANOTHER_KV_STORE', namespaceName: 'another-kv-store' }
+      ]);
+    });
+
+    test('should not detect non-KV objects as KV bindings', () => {
+      const mockEnv = {
+        REGULAR_STRING: 'not a kv',
+        EMPTY_OBJECT: {},
+        PARTIAL_KV: { get: jest.fn() }, // Missing put and delete
+        FUNCTION_PROP: jest.fn(),
+        NULL_VALUE: null,
+        UNDEFINED_VALUE: undefined
+      };
+
+      // @ts-ignore - accessing private method for testing
+      const detectedBindings = container.autoDetectKvBindings(mockEnv);
+
+      expect(detectedBindings).toHaveLength(0);
+    });
+
+    test('should use auto-detected KV bindings during container construction', () => {
+      const mockKvNamespace = {
+        get: jest.fn(),
+        put: jest.fn(),
+        delete: jest.fn()
+      };
+
+      const mockEnv = {
+        AUTO_CACHE: mockKvNamespace,
+        AUTO_SESSIONS: mockKvNamespace
+      };
+
+      // Create a new container without explicit kvBindings
+      const autoContainer = new TestContainer(mockCtx, mockEnv as any);
+
+      expect(autoContainer.kvBindings).toHaveLength(2);
+      expect(autoContainer.kvBindings).toEqual([
+        { binding: 'AUTO_CACHE', namespaceName: 'auto-cache' },
+        { binding: 'AUTO_SESSIONS', namespaceName: 'auto-sessions' }
+      ]);
+    });
+
+    test('should prefer explicit kvBindings over auto-detection', () => {
+      const mockKvNamespace = {
+        get: jest.fn(),
+        put: jest.fn(),
+        delete: jest.fn()
+      };
+
+      const mockEnv = {
+        AUTO_CACHE: mockKvNamespace,
+        AUTO_SESSIONS: mockKvNamespace
+      };
+
+      const explicitBindings = [
+        { binding: 'MANUAL_CACHE', namespaceName: 'manual-cache' }
+      ];
+
+      // Create container with explicit bindings
+      const explicitContainer = new TestContainer(mockCtx, mockEnv as any, {
+        kvBindings: explicitBindings
+      });
+
+      // Should use explicit bindings, not auto-detected ones
+      expect(explicitContainer.kvBindings).toHaveLength(1);
+      expect(explicitContainer.kvBindings).toEqual(explicitBindings);
+    });
+  });
+
 // Create load balance tests
 describe('getRandom', () => {
   test('should return a container stub', async () => {
