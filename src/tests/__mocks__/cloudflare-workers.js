@@ -1,5 +1,5 @@
 // Mock for cloudflare:workers module
-export class DurableObject {
+class DurableObject {
   constructor(ctx, env) {
     this.ctx = ctx;
     this.env = env;
@@ -9,3 +9,5 @@ export class DurableObject {
     return new Response('Mock DurableObject response');
   }
 }
+
+module.exports = { DurableObject };

@@ -33,6 +33,18 @@ export interface KvBinding {
 }
 
 /**
+ * Configuration for Secrets Store bindings
+ */
+export interface SecretsStoreBinding {
+  /** Name of the binding (used in environment variables) */
+  binding: string;
+  /** ID of the Secrets Store where the secret is stored */
+  storeId: string;
+  /** Name of the secret in the store */
+  secretName: string;
+}
+
+/**
  * Options for container configuration
  */
 export interface ContainerOptions {
@@ -56,6 +68,9 @@ export interface ContainerOptions {
 
   /** KV namespace bindings configuration */
   kvBindings?: KvBinding[];
+
+  /** Secrets Store bindings configuration */
+  secretsStoreBindings?: SecretsStoreBinding[];
 }
 
 /**

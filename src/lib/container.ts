@@ -10,6 +10,7 @@ import type {
   CancellationOptions,
   StartAndWaitForPortsOptions,
   KvBinding,
+  SecretsStoreBinding,
 } from '../types';
 import { generateId, parseTimeExpression } from './helpers';
 import { DurableObject } from 'cloudflare:workers';
@@ -237,6 +238,9 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   // KV namespace bindings for container applications
   kvBindings: KvBinding[] = [];
 
+  // Secrets Store bindings for container applications
+  secretsStoreBindings: SecretsStoreBinding[] = [];
+
   // =========================
   //     PUBLIC INTERFACE
   // =========================
@@ -266,11 +270,17 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       if (options.defaultPort !== undefined) this.defaultPort = options.defaultPort;
       if (options.sleepAfter !== undefined) this.sleepAfter = options.sleepAfter;
       if (options.kvBindings !== undefined) this.kvBindings = options.kvBindings;
+      if (options.secretsStoreBindings !== undefined) this.secretsStoreBindings = options.secretsStoreBindings;
     }
 
     // Auto-detect KV bindings from environment if not explicitly provided
     if (this.kvBindings.length === 0) {
       this.kvBindings = this.autoDetectKvBindings(env);
+    }
+
+    // Auto-detect Secrets Store bindings from environment if not explicitly provided
+    if (this.secretsStoreBindings.length === 0) {
+      this.secretsStoreBindings = this.autoDetectSecretsStoreBindings(env);
     }
 
     // Create schedules table if it doesn't exist
@@ -919,7 +929,8 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
       // Generate KV binding environment variables and merge with existing env vars
       const kvEnvVars = this.setupKvBindingEnvironment();
-      const mergedEnvVars = { ...baseEnvVars, ...kvEnvVars };
+      const secretsStoreEnvVars = this.setupSecretsStoreBindingEnvironment();
+      const mergedEnvVars = { ...baseEnvVars, ...kvEnvVars, ...secretsStoreEnvVars };
 
       // Only include properties that are defined
       const startConfig: ContainerStartOptions = {
@@ -1452,5 +1463,154 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     }
     
     return kvBindings;
+  }
+
+  // ==========================
+  //     SECRETS STORE BINDING HELPERS
+  // ==========================
+
+  /**
+   * Generate environment variables for Secrets Store bindings
+   * Creates SECRETS_{BINDING_NAME}_BINDING, SECRETS_{BINDING_NAME}_STORE_ID, and SECRETS_{BINDING_NAME}_SECRET_NAME environment variables
+   * @private
+   */
+  private setupSecretsStoreBindingEnvironment(): Record<string, string> {
+    const secretsEnvVars: Record<string, string> = {};
+    for (const binding of this.secretsStoreBindings) {
+      const envPrefix = binding.binding.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+      secretsEnvVars[`SECRETS_${envPrefix}_BINDING`] = binding.binding;
+      secretsEnvVars[`SECRETS_${envPrefix}_STORE_ID`] = binding.storeId;
+      secretsEnvVars[`SECRETS_${envPrefix}_SECRET_NAME`] = binding.secretName;
+    }
+    return secretsEnvVars;
+  }
+
+  /**
+   * Get detailed information about configured Secrets Store bindings
+   * @public
+   */
+  public getSecretsStoreBindingInfo(): Record<string, { binding: string; storeId: string; secretName: string; envVars: Record<string, string> }> {
+    const bindingInfo: Record<string, any> = {};
+    for (const binding of this.secretsStoreBindings) {
+      const envPrefix = binding.binding.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+      const envVars: Record<string, string> = {
+        [`SECRETS_${envPrefix}_BINDING`]: binding.binding,
+        [`SECRETS_${envPrefix}_STORE_ID`]: binding.storeId,
+        [`SECRETS_${envPrefix}_SECRET_NAME`]: binding.secretName
+      };
+      
+      bindingInfo[binding.binding] = {
+        binding: binding.binding,
+        storeId: binding.storeId,
+        secretName: binding.secretName,
+        envVars
+      };
+    }
+    return bindingInfo;
+  }
+
+  /**
+   * Validate Secrets Store binding environment variables are properly set
+   * @public
+   */
+  public validateSecretsStoreBindingEnvironment(): { valid: boolean; bindings: Record<string, any>; errors: string[] } {
+    const errors: string[] = [];
+    const bindings: Record<string, any> = {};
+    
+    // Get all Secrets Store environment variables from process.env
+    const secretsVars: Record<string, string> = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      if (key.startsWith('SECRETS_') && value) {
+        secretsVars[key] = value;
+      }
+    }
+    
+    // Group Secrets Store variables by binding name
+    const groupedBindings: Record<string, Record<string, string>> = {};
+    for (const [key, value] of Object.entries(secretsVars)) {
+      const match = key.match(/^SECRETS_([A-Z0-9_]+)_(BINDING|STORE_ID|SECRET_NAME)$/);
+      if (match) {
+        const bindingName = match[1];
+        const varType = match[2];
+        if (!groupedBindings[bindingName]) {
+          groupedBindings[bindingName] = {};
+        }
+        groupedBindings[bindingName][varType] = value;
+      }
+    }
+    
+    // Check each configured binding
+    for (const binding of this.secretsStoreBindings) {
+      const envPrefix = binding.binding.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+      const foundBinding = groupedBindings[envPrefix];
+      
+      if (!foundBinding) {
+        errors.push(`Secrets Store binding '${binding.binding}' not found in environment variables`);
+        continue;
+      }
+      
+      if (!foundBinding.BINDING) {
+        errors.push(`SECRETS_${envPrefix}_BINDING environment variable missing`);
+      }
+      
+      if (!foundBinding.STORE_ID) {
+        errors.push(`SECRETS_${envPrefix}_STORE_ID environment variable missing`);
+      }
+      
+      if (!foundBinding.SECRET_NAME) {
+        errors.push(`SECRETS_${envPrefix}_SECRET_NAME environment variable missing`);
+      }
+      
+      bindings[binding.binding] = {
+        configured: binding,
+        environment: foundBinding,
+        valid: foundBinding.BINDING && foundBinding.STORE_ID && foundBinding.SECRET_NAME
+      };
+    }
+    
+    return {
+      valid: errors.length === 0,
+      bindings,
+      errors
+    };
+  }
+
+  /**
+   * Get a summary of Secrets Store bindings for logging and debugging
+   * @public
+   */
+  public getSecretsStoreBindingSummary(): { configured: number; bindings: Array<{ name: string; storeId: string; secretName: string }> } {
+    return {
+      configured: this.secretsStoreBindings.length,
+      bindings: this.secretsStoreBindings.map(binding => ({
+        name: binding.binding,
+        storeId: binding.storeId,
+        secretName: binding.secretName
+      }))
+    };
+  }
+
+  /**
+   * Auto-detect Secrets Store bindings from the environment
+   * @private
+   */
+  private autoDetectSecretsStoreBindings(env: any): SecretsStoreBinding[] {
+    const secretsStoreBindings: SecretsStoreBinding[] = [];
+    
+    // Look for Secrets Store binding properties in the environment
+    for (const [key, value] of Object.entries(env)) {
+      // Check if this property looks like a Secrets Store binding
+      if (value && typeof value === 'object' && 'get' in value && typeof value.get === 'function') {
+        // This looks like a Secrets Store binding - we need store_id and secret_name
+        // For auto-detection, we'll use sensible defaults based on the binding name
+        secretsStoreBindings.push({
+          binding: key,
+          storeId: `auto-detected-store-${key.toLowerCase()}`,
+          secretName: key.toLowerCase().replace(/_/g, '-')
+        });
+      }
+    }
+    
+    return secretsStoreBindings;
   }
 }

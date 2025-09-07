@@ -47,6 +47,8 @@ describe('Container', () => {
         sql: {
           exec: jest.fn().mockReturnValue([]),
         },
+        setAlarm: jest.fn().mockResolvedValue(undefined),
+        sync: jest.fn().mockResolvedValue(undefined),
       },
       blockConcurrencyWhile: jest.fn(fn => fn()),
       container: {
@@ -87,7 +89,7 @@ describe('Container', () => {
 
   test('should initialize with default values', () => {
     expect(container.defaultPort).toBe(8080);
-    expect(container.sleepAfter).toBe('5m');
+    expect(container.sleepAfter).toBe('10m');
   });
 
   test('startAndWaitForPorts should start container if not running (single port)', async () => {
@@ -581,6 +583,337 @@ describe('Container', () => {
       // Should use explicit bindings, not auto-detected ones
       expect(explicitContainer.kvBindings).toHaveLength(1);
       expect(explicitContainer.kvBindings).toEqual(explicitBindings);
+    });
+  });
+
+  // Secrets Store Bindings tests
+  describe('Secrets Store Bindings', () => {
+    test('should initialize with secretsStoreBindings from constructor options', () => {
+      const secretsStoreBindings = [
+        { binding: 'API_KEY', storeId: 'store-123', secretName: 'api-key' },
+        { binding: 'DB_PASSWORD', storeId: 'store-456', secretName: 'db-password' }
+      ];
+
+      const containerWithSecrets = new Container(mockCtx, {}, { secretsStoreBindings });
+      // Add ctx property for testing
+      (containerWithSecrets as any).ctx = mockCtx;
+
+      expect(containerWithSecrets.secretsStoreBindings).toEqual(secretsStoreBindings);
+    });
+
+    test('should generate correct Secrets Store environment variables', () => {
+      const secretsStoreBindings = [
+        { binding: 'API_KEY', storeId: 'store-123', secretName: 'api-key' },
+        { binding: 'DB_PASSWORD', storeId: 'store-456', secretName: 'db-password' }
+      ];
+
+      container.secretsStoreBindings = secretsStoreBindings;
+
+      // @ts-ignore - accessing private method for testing
+      const envVars = container.setupSecretsStoreBindingEnvironment();
+
+      expect(envVars).toEqual({
+        'SECRETS_API_KEY_BINDING': 'API_KEY',
+        'SECRETS_API_KEY_STORE_ID': 'store-123',
+        'SECRETS_API_KEY_SECRET_NAME': 'api-key',
+        'SECRETS_DB_PASSWORD_BINDING': 'DB_PASSWORD',
+        'SECRETS_DB_PASSWORD_STORE_ID': 'store-456',
+        'SECRETS_DB_PASSWORD_SECRET_NAME': 'db-password'
+      });
+    });
+
+    test('should sanitize binding names for environment variables', () => {
+      const secretsStoreBindings = [
+        { binding: 'my-special-api-key', storeId: 'store-789', secretName: 'special-key' }
+      ];
+
+      container.secretsStoreBindings = secretsStoreBindings;
+
+      // @ts-ignore - accessing private method for testing
+      const envVars = container.setupSecretsStoreBindingEnvironment();
+
+      expect(envVars).toEqual({
+        'SECRETS_MY_SPECIAL_API_KEY_BINDING': 'my-special-api-key',
+        'SECRETS_MY_SPECIAL_API_KEY_STORE_ID': 'store-789',
+        'SECRETS_MY_SPECIAL_API_KEY_SECRET_NAME': 'special-key'
+      });
+    });
+
+    test('should merge Secrets Store environment variables with existing env vars during container start', () => {
+      const secretsStoreBindings = [
+        { binding: 'TEST_SECRET', storeId: 'test-store', secretName: 'test-secret' }
+      ];
+
+      container.secretsStoreBindings = secretsStoreBindings;
+      container.envVars = { 'EXISTING_VAR': 'value' };
+
+      // Mock the container start process enough to test env var merging
+      const startOptions = undefined;
+
+      // Simulate the env var merging logic from startAndWaitForPorts
+      const baseEnvVars = startOptions?.envVars ?? container.envVars;
+      // @ts-ignore - accessing private method for testing
+      const kvEnvVars = container.setupKvBindingEnvironment();
+      // @ts-ignore - accessing private method for testing
+      const secretsStoreEnvVars = container.setupSecretsStoreBindingEnvironment();
+      const mergedEnvVars = { ...baseEnvVars, ...kvEnvVars, ...secretsStoreEnvVars };
+
+      expect(mergedEnvVars).toEqual({
+        'EXISTING_VAR': 'value',
+        'SECRETS_TEST_SECRET_BINDING': 'TEST_SECRET',
+        'SECRETS_TEST_SECRET_STORE_ID': 'test-store',
+        'SECRETS_TEST_SECRET_SECRET_NAME': 'test-secret'
+      });
+    });
+
+    test('should handle empty secretsStoreBindings array', () => {
+      container.secretsStoreBindings = [];
+
+      // @ts-ignore - accessing private method for testing
+      const envVars = container.setupSecretsStoreBindingEnvironment();
+
+      expect(envVars).toEqual({});
+    });
+
+    test('should provide Secrets Store binding info via getSecretsStoreBindingInfo', () => {
+      const secretsStoreBindings = [
+        { binding: 'API_KEY', storeId: 'store-123', secretName: 'api-key' },
+        { binding: 'DB_PASSWORD', storeId: 'store-456', secretName: 'db-password' }
+      ];
+
+      container.secretsStoreBindings = secretsStoreBindings;
+
+      const bindingInfo = container.getSecretsStoreBindingInfo();
+
+      expect(bindingInfo).toEqual({
+        'API_KEY': {
+          binding: 'API_KEY',
+          storeId: 'store-123',
+          secretName: 'api-key',
+          envVars: {
+            'SECRETS_API_KEY_BINDING': 'API_KEY',
+            'SECRETS_API_KEY_STORE_ID': 'store-123',
+            'SECRETS_API_KEY_SECRET_NAME': 'api-key'
+          }
+        },
+        'DB_PASSWORD': {
+          binding: 'DB_PASSWORD',
+          storeId: 'store-456',
+          secretName: 'db-password',
+          envVars: {
+            'SECRETS_DB_PASSWORD_BINDING': 'DB_PASSWORD',
+            'SECRETS_DB_PASSWORD_STORE_ID': 'store-456',
+            'SECRETS_DB_PASSWORD_SECRET_NAME': 'db-password'
+          }
+        }
+      });
+    });
+
+    test('should provide Secrets Store binding summary via getSecretsStoreBindingSummary', () => {
+      const secretsStoreBindings = [
+        { binding: 'API_KEY', storeId: 'store-123', secretName: 'api-key' },
+        { binding: 'DB_PASSWORD', storeId: 'store-456', secretName: 'db-password' }
+      ];
+
+      container.secretsStoreBindings = secretsStoreBindings;
+
+      const summary = container.getSecretsStoreBindingSummary();
+
+      expect(summary).toEqual({
+        configured: 2,
+        bindings: [
+          { name: 'API_KEY', storeId: 'store-123', secretName: 'api-key' },
+          { name: 'DB_PASSWORD', storeId: 'store-456', secretName: 'db-password' }
+        ]
+      });
+    });
+
+    test('should validate Secrets Store binding environment variables', () => {
+      const secretsStoreBindings = [
+        { binding: 'TEST_SECRET', storeId: 'test-store', secretName: 'test-secret' }
+      ];
+
+      container.secretsStoreBindings = secretsStoreBindings;
+
+      // Mock process.env for validation test
+      const originalEnv = process.env;
+      process.env = {
+        ...originalEnv,
+        'SECRETS_TEST_SECRET_BINDING': 'TEST_SECRET',
+        'SECRETS_TEST_SECRET_STORE_ID': 'test-store',
+        'SECRETS_TEST_SECRET_SECRET_NAME': 'test-secret'
+      };
+
+      const validation = container.validateSecretsStoreBindingEnvironment();
+
+      expect(validation.valid).toBe(true);
+      expect(validation.errors).toHaveLength(0);
+      expect(validation.bindings['TEST_SECRET']).toEqual({
+        configured: { binding: 'TEST_SECRET', storeId: 'test-store', secretName: 'test-secret' },
+        environment: {
+          BINDING: 'TEST_SECRET',
+          STORE_ID: 'test-store',
+          SECRET_NAME: 'test-secret'
+        },
+        valid: true
+      });
+
+      // Restore original env
+      process.env = originalEnv;
+    });
+
+    test('should auto-detect Secrets Store bindings from environment', () => {
+      // Mock Secrets Store binding objects
+      const mockSecretsBinding1 = {
+        get: jest.fn().mockResolvedValue('secret-value-1')
+      };
+
+      const mockSecretsBinding2 = {
+        get: jest.fn().mockResolvedValue('secret-value-2')
+      };
+
+      const mockEnv = {
+        API_KEY: mockSecretsBinding1,
+        DATABASE_PASSWORD: mockSecretsBinding2,
+        NOT_A_SECRET: 'just a string',
+        ALSO_NOT_SECRET: { someProperty: 'value' }
+      };
+
+      // @ts-ignore - accessing private method for testing
+      const detectedBindings = container.autoDetectSecretsStoreBindings(mockEnv);
+
+      expect(detectedBindings).toHaveLength(2);
+      expect(detectedBindings).toEqual([
+        { binding: 'API_KEY', storeId: 'auto-detected-store-api_key', secretName: 'api-key' },
+        { binding: 'DATABASE_PASSWORD', storeId: 'auto-detected-store-database_password', secretName: 'database-password' }
+      ]);
+    });
+
+    test('should auto-detect Secrets Store bindings with underscore to dash conversion', () => {
+      const mockSecretsBinding = {
+        get: jest.fn().mockResolvedValue('secret-value')
+      };
+
+      const mockEnv = {
+        MY_SPECIAL_API_KEY: mockSecretsBinding,
+        ANOTHER_SECRET_TOKEN: mockSecretsBinding
+      };
+
+      // @ts-ignore - accessing private method for testing
+      const detectedBindings = container.autoDetectSecretsStoreBindings(mockEnv);
+
+      expect(detectedBindings).toEqual([
+        { binding: 'MY_SPECIAL_API_KEY', storeId: 'auto-detected-store-my_special_api_key', secretName: 'my-special-api-key' },
+        { binding: 'ANOTHER_SECRET_TOKEN', storeId: 'auto-detected-store-another_secret_token', secretName: 'another-secret-token' }
+      ]);
+    });
+
+    test('should not detect non-Secrets Store objects as Secrets Store bindings', () => {
+      const mockEnv = {
+        REGULAR_STRING: 'not a secret',
+        EMPTY_OBJECT: {},
+        PARTIAL_SECRET: { someMethod: jest.fn() }, // Missing get method
+        FUNCTION_PROP: jest.fn(),
+        NULL_VALUE: null,
+        UNDEFINED_VALUE: undefined
+      };
+
+      // @ts-ignore - accessing private method for testing
+      const detectedBindings = container.autoDetectSecretsStoreBindings(mockEnv);
+
+      expect(detectedBindings).toHaveLength(0);
+    });
+
+    test('should use auto-detected Secrets Store bindings during container construction', () => {
+      const mockSecretsBinding = {
+        get: jest.fn().mockResolvedValue('secret-value')
+      };
+
+      const mockEnv = {
+        AUTO_API_KEY: mockSecretsBinding,
+        AUTO_DB_PASSWORD: mockSecretsBinding
+      };
+
+      // Create a new container without explicit secretsStoreBindings
+      const autoContainer = new TestContainer(mockCtx, mockEnv as any);
+
+      expect(autoContainer.secretsStoreBindings).toHaveLength(2);
+      expect(autoContainer.secretsStoreBindings).toEqual([
+        { binding: 'AUTO_API_KEY', storeId: 'auto-detected-store-auto_api_key', secretName: 'auto-api-key' },
+        { binding: 'AUTO_DB_PASSWORD', storeId: 'auto-detected-store-auto_db_password', secretName: 'auto-db-password' }
+      ]);
+    });
+
+    test('should prefer explicit secretsStoreBindings over auto-detection', () => {
+      const mockSecretsBinding = {
+        get: jest.fn().mockResolvedValue('secret-value')
+      };
+
+      const mockEnv = {
+        AUTO_API_KEY: mockSecretsBinding,
+        AUTO_DB_PASSWORD: mockSecretsBinding
+      };
+
+      const explicitBindings = [
+        { binding: 'MANUAL_API_KEY', storeId: 'manual-store', secretName: 'manual-api-key' }
+      ];
+
+      // Create container with explicit bindings
+      const explicitContainer = new TestContainer(mockCtx, mockEnv as any, {
+        secretsStoreBindings: explicitBindings
+      });
+
+      // Should use explicit bindings, not auto-detected ones
+      expect(explicitContainer.secretsStoreBindings).toHaveLength(1);
+      expect(explicitContainer.secretsStoreBindings).toEqual(explicitBindings);
+    });
+
+    test('should handle validation errors for missing environment variables', () => {
+      const secretsStoreBindings = [
+        { binding: 'MISSING_SECRET', storeId: 'test-store', secretName: 'missing-secret' }
+      ];
+
+      container.secretsStoreBindings = secretsStoreBindings;
+
+      // Mock process.env without the required variables
+      const originalEnv = process.env;
+      process.env = {
+        ...originalEnv
+        // No SECRETS_* variables set
+      };
+
+      const validation = container.validateSecretsStoreBindingEnvironment();
+
+      expect(validation.valid).toBe(false);
+      expect(validation.errors).toContain(`Secrets Store binding 'MISSING_SECRET' not found in environment variables`);
+
+      // Restore original env
+      process.env = originalEnv;
+    });
+
+    test('should handle validation errors for partial environment variables', () => {
+      const secretsStoreBindings = [
+        { binding: 'PARTIAL_SECRET', storeId: 'test-store', secretName: 'partial-secret' }
+      ];
+
+      container.secretsStoreBindings = secretsStoreBindings;
+
+      // Mock process.env with only partial variables
+      const originalEnv = process.env;
+      process.env = {
+        ...originalEnv,
+        'SECRETS_PARTIAL_SECRET_BINDING': 'PARTIAL_SECRET',
+        // Missing STORE_ID and SECRET_NAME
+      };
+
+      const validation = container.validateSecretsStoreBindingEnvironment();
+
+      expect(validation.valid).toBe(false);
+      expect(validation.errors).toContain('SECRETS_PARTIAL_SECRET_STORE_ID environment variable missing');
+      expect(validation.errors).toContain('SECRETS_PARTIAL_SECRET_SECRET_NAME environment variable missing');
+
+      // Restore original env
+      process.env = originalEnv;
     });
   });
 

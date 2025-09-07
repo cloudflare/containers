@@ -6,7 +6,7 @@ module.exports = {
   transform: {
     '^.+\\.ts$': ['ts-jest', { tsconfig: 'tsconfig.json' }]
   },
-  moduleNameMapping: {
+  moduleNameMapper: {
     '^cloudflare:workers$': '<rootDir>/src/tests/__mocks__/cloudflare-workers.js'
   },
   setupFilesAfterEnv: ['<rootDir>/src/tests/setup.ts'],
