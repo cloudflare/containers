@@ -21,13 +21,18 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      - name: Install dependencies
-        working-directory: fixtures/basic
-        run: npm install
-        
-      - name: Run integration tests
-        working-directory: fixtures/basic
-        run: npm run test
+      - name: Install dependencies and run tests for all fixtures
+        run: |
+          for fixture in fixtures/*/; do
+            if [ -f "$fixture/package.json" ]; then
+              echo "Installing dependencies for $fixture"
+              cd "$fixture"
+              npm install
+              echo "Running tests for $fixture"
+              npm run test
+              cd - > /dev/null
+            fi
+          done
         timeout-minutes: 10
         
         
@@ -47,6 +52,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Type check fixtures
-        working-directory: fixtures/basic
-        run: npx tsc --noEmit
+      - name: Type check all fixtures
+        run: |
+          for fixture in fixtures/*/; do
+            if [ -f "$fixture/tsconfig.json" ]; then
+              echo "Type checking $fixture"
+              cd "$fixture"
+              npx tsc --noEmit
+              cd - > /dev/null
+            fi
+          done
