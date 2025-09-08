@@ -73,11 +73,18 @@ export interface CancellationOptions {
   waitInterval?: number;
 }
 
+/**
+ * Options for waitForPort()
+ */
 export interface WaitOptions {
-  abort?: AbortSignal;
-  retries: number;
-  waitInterval: number;
+  /** The port number to check for readiness */
   portToCheck: number;
+  /** Optional AbortSignal, use this to abort waiting for ports */
+  signal?: AbortSignal;
+  /** Number of attempts to wait for port to be ready */
+  retries?: number;
+  /** Time to wait in between polling port for readiness, in milliseconds */
+  waitInterval?: number;
 }
 
 /**

@@ -32,6 +32,7 @@ export class WranglerDevRunner {
       this.process.stdout.on('data', (data: Buffer) => {
         const output = data.toString();
         this.stdout += output;
+        console.log(output);
 
         // Check for ready pattern
         const match = output.match(/Ready on (?<url>https?:\/\/.*)/);
@@ -44,6 +45,7 @@ export class WranglerDevRunner {
 
       this.process.stderr.on('data', (data: Buffer) => {
         this.stderr += data.toString();
+        console.log(data.toString());
       });
     });
   }
@@ -64,7 +66,8 @@ export class WranglerDevRunner {
     for (const id of containerId) {
       await fetch(this.url + '/stop?id=' + id);
     }
-
+    // give it a second to run the onStop hook before we kill the process
+    await new Promise(resolve => setTimeout(resolve, 1000));
     this.process.kill('SIGTERM');
 
     // Wait a bit for the process to finish
