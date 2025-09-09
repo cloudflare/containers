@@ -19,7 +19,7 @@ npm install @cloudflare/containers
 ## Basic Example
 
 ```typescript
-import { Container, getRandom } from '@cloudflare/containers';
+import { Container, getContainer, getRandom } from '@cloudflare/containers';
 
 export class MyContainer extends Container {
   // Configure default port for the container
@@ -36,16 +36,13 @@ export default {
 
     if (pathname.startsWith('/specific/')) {
       // In this case, each unique pathname will spawn a new container
-      let id = env.MY_CONTAINER.idFromName(pathname);
-      let stub = env.MY_CONTAINER.get(id);
-      return await stub.fetch(request);
+      const container = env.MY_CONTAINER.getByName(pathname);
+      return await container.fetch(request);
     }
 
-    // (Note: getRandom is a temporary method until built-in autoscaling an
-    // load balancing are added)
-
-    // If you want to route to one of many containers (in this case 5),
-    // use the getRandom helper
+    // Note: this is a temporary method until built-in autoscaling and load balancing are added.
+    // If you want to route to one of many containers (in this case 5), use the getRandom helper.
+    // This load balances incoming requests across these container instances.
     let container = await getRandom(env.MY_CONTAINER, 5);
     return await container.fetch(request);
   },
@@ -60,59 +57,74 @@ The `Container` class that extends a container-enbled Durable Object to provide 
 
 #### Properties
 
-- `defaultPort?`: Optional default port to use when communicating with the container. If not set, you must specify port in `containerFetch` calls, or use `switchPort`.
-- `requiredPorts?`: Array of ports that should be checked for availability during container startup. Used by startAndWaitForPorts when no specific ports are provided.
+- `defaultPort?`: Optional default port to use when communicating with the container. If not set, you must specify port like `fetch(switchPort(req, 8080))` or `containerFetch(req, 8080)`.
+- `requiredPorts?`: Array of ports that should be checked for availability during container startup. Used by `startAndWaitForPorts` when no specific ports are provided.
 - `sleepAfter`: How long to keep the container alive without activity (format: number for seconds, or string like "5m", "30s", "1h")
-- `env`: Environment variables to pass to the container (Record<string, string>)
-- `entrypoint?`: Custom entrypoint to override container default (string[])
-- `enableInternet`: Whether to enable internet access for the container (boolean, default: true)
-- Lifecycle methods: `onStart`, `onStop`, `onError`, `onActivityExpired`
-
-#### Constructor Options
-
-```typescript
-constructor(ctx: any, env: Env, options?: {
-  defaultPort?: number;           // Override default port
-  sleepAfter?: string | number;   // Override sleep timeout
-  env?: Record<string, string>;   // Environment variables to pass to the container
-  entrypoint?: string[];          // Custom entrypoint to override container default
-  enableInternet?: boolean;       // Whether to enable internet access for the container
-})
-```
+- `env`: Environment variables to pass to the container (Record<string, string>) when starting up. These are the defaults but can be overriden on a per-instance basis when starting.
+- `entrypoint?`: Custom entrypoint to override container default (string[]). These are the defaults but can be overriden on a per-instance basis when starting.
+- `enableInternet`: Whether to enable internet access for the container (boolean, default: `true`). These are the defaults but can be overriden on a per-instance basis when starting.
 
 #### Methods
 
-##### Lifecycle Methods
+##### Lifecycle Hooks
 
-All lifecycle methods can be implemented as async if needed.
+These lifecycle methods are automatically called when the container state transitions. Override these methods to use these hooks.
 
-- `onStart()`: Called when container starts successfully - override to add custom behavior
-- `onStop()`: Called when container shuts down - override to add custom behavior
-- `onError(error)`: Called when container encounters an error - override to add custom behavior
-- `onActivityExpired()`: Called when the activity is expired - override to add custom behavior, like communicating with the container to see if it should be shutdown.
+See [this example](#http-example-with-lifecycle-hooks).
 
-By default, it calls `ctx.container.destroy()`.
-If you don't stop the container here, the activity tracker will be renewed, and this lifecycle hook will be called again when the timer re-expires.
+- `onStart()`
+
+  Called when container starts successfully.
+
+  - called when states transition from `stopped` -> `running`, `running` -> `healthy`
+
+- `onStop()`
+
+  Called when container shuts down.
+
+- `onError(error)`
+
+  Called when container encounters an error, and by default logs and throws the error.
+
+- `onActivityExpired()`
+
+  Called when the activity is expired. The container will run continue to run for some time after the last activity - this length of time is configured by `sleepAfter`.
+  By default, this stops the container with a `SIGTERM`, but you can override this behaviour, as with other lifecycle hooks. However, if you don't stop the container here, the activity tracker will be renewed, and this lifecycle hook will be called again when the timer re-expires.
 
 ##### Container Methods
 
-- `fetch(request)`: Default handler to forward HTTP requests to the container. Can be overridden.
-- `containerFetch(...)`: Sends an HTTP request to the container. Supports both standard fetch API signatures:
+- `fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>`
+
+  Forwards HTTP requests to the container.
+
+  If you want to target a specific port on the container, rather than the default port, you should use `switchPort` like so:
+
+  ```typescript
+  const container = env.MY_CONTAINER.getByName('id');
+  await container.fetch(switchPort(request, 8080));
+  ```
+
+  Make sure you provide a port with switchPort or specify a port with the `defaultPort` property.
+
+  You must use `fetch` rather than `containerFetch` if you want to forward websockets.
+
+  Note that when you call any of the fetch functions, the activity will be automatically renewed (sleepAfter time starts after last activity), and the container will be started if not already running.
+
+- `containerFetch(...)`
+
+  Note: `containerFetch` does not work with websockets.
+
+  Sends an HTTP request to the container. Supports both standard fetch API signatures:
 
   - `containerFetch(request, port?)`: Traditional signature with Request object
   - `containerFetch(url, init?, port?)`: Standard fetch-like signature with URL string/object and RequestInit options
-    Either port parameter or defaultPort must be specified.
-    When you call any of the fetch functions, the activity will be automatically renewed, and if the container will be started if not already running.
-    \*\*Do not use 'containerFetch' when trying to send a Request object with a websocket, until [this issue is addressed](https://github.com/cloudflare/workerd/issues/2319).
-    You can overcome this limitation by doing:
-    `container.fetch(switchPort(request, port))`
 
 - `startAndWaitForPorts(args: StartAndWaitForPortsOptions): Promise<void>`
 
   Starts the container and then waits for specified ports to be ready. Prioritises `ports` passed in to the function, then `requiredPorts` if set, then `defaultPort`.
 
   ```typescript
-  export interface StartAndWaitForPortsOptions {
+  interface StartAndWaitForPortsOptions {
     startOptions?: {
       /** Environment variables to pass to the container */
       envVars?: Record<string, string>;
@@ -136,17 +148,96 @@ If you don't stop the container here, the activity tracker will be renewed, and 
   }
   ```
 
-- `start()`: Starts the container if it's not running and sets up monitoring, without waiting for any ports to be ready.
-- `stop(signal = SIGTERM)`: Sends the specified signal to the container.
-- `destroy()`: Forcefully destroys the container.
-- `getState()`: Get the current container state.
-- `renewActivityTimeout()`: Manually renews the container activity timeout (extends container lifetime).
-- `stopDueToInactivity()`: Called automatically when the container times out due to inactivity.
-- `alarm()`: Default alarm handler. It's in charge of renewing the container activity and keeping the durable object alive. You can override `alarm()`, but because its functionality is currently vital to managing the container lifecycle, we recommend calling `schedule` to schedule tasks instead.
+- `start(startOptions?: ContainerStartConfigOptions, waitOptions?: WaitOptions)`
+
+  Starts the container, without waiting for any ports to be ready.
+
+  You might want to use this instead of `startAndWaitForPorts` if you want to:
+
+  - Start a container without blocking until a port is available
+  - Initialize a container that doesn't expose ports
+  - Perform custom port availability checks separately
+
+  Options:
+
+  ```typescript
+  interface ContainerStartConfigOptions {
+    /** Environment variables to pass to the container */
+    envVars?: Record<string, string>;
+    /** Custom entrypoint to override container default */
+    entrypoint?: string[];
+    /** Whether to enable internet access for the container */
+    enableInternet?: boolean;
+  }
+
+  interface WaitOptions {
+    /** The port number to check for readiness */
+    portToCheck: number;
+    /** Optional AbortSignal, use this to abort waiting for ports */
+    signal?: AbortSignal;
+    /** Number of attempts to wait for port to be ready */
+    retries?: number;
+    /** Time to wait in between polling port for readiness, in milliseconds */
+    waitInterval?: number;
+  }
+  ```
+
+- `stop(signal = SIGTERM): Promise<void>`
+
+  Sends the specified signal to the container. Triggers `onStop`.
+
+- `destroy(): Promise<void>`
+
+  Forcefully destroys the container (sends `SIGKILL`). Triggers `onStop`.
+
+- `getState(): Promise<State>`
+
+  Get the current container state.
+
+  ```typescript
+  type State = {
+    lastChange: number;
+  } & (
+    | {
+        // 'running' means that the container is trying to start and is transitioning to a healthy status.
+        //           onStop might be triggered if there is an exit code, and it will transition to 'stopped'.
+        status: 'running' | 'stopping' | 'stopped' | 'healthy';
+      }
+    | {
+        status: 'stopped_with_code';
+        exitCode?: number;
+      }
+  );
+  ```
+
+- `renewActivityTimeout()`
+
+  Manually renews the container activity timeout (extends container lifetime).
+
+- `schedule<T = string>(when: Date | number, callback: string, payload?: T): Promise<Schedule<T>>`
+
+  Options:
+
+  - `when`: When to execute the task (Date object or number of seconds delay)
+  - `callback`: Name of the function to call as a string
+  - `payload`: Data to pass to the callback
+
+  Instead of using the default alarm handler, use `schedule()` instead. The default alarm handler is in charge of renewing the container activity and keeping the durable object alive. You can override `alarm()`, but because its functionality is currently vital to managing the container lifecycle, we recommend calling `schedule` to schedule tasks instead.
 
 ### Utility Functions
 
-- `getRandom(binding, instances?)`: Load balances requests across multiple container instances
+- `getRandom(binding, instances?: number)`
+
+  Get a random container instances across N instances. This is useful for load balancing.
+  Returns a stub for the container.
+  See [example](#using-load-balancing).
+
+- `getContainer(binding, name?: string)`
+  Helper to get a particular container instance stub.
+
+  e.g. `const container = getContainer(env.CONTAINER, "unique-id")`
+
+  If no name is provided, "cf-singleton-container" is used.
 
 ## Examples
 
@@ -196,13 +287,6 @@ export class MyContainer extends Container {
     console.log('Container activity timeout extended');
   }
 
-  // Handle incoming requests
-  async fetch(request: Request): Promise<Response> {
-    // Default implementation forwards requests to the container
-    // This will automatically renew the activity timeout
-    return await this.containerFetch(request);
-  }
-
   // Additional methods can be implemented as needed
 }
 ```
@@ -211,18 +295,16 @@ export class MyContainer extends Container {
 
 The Container class automatically supports proxying WebSocket connections to your container. WebSocket connections are bi-directionally proxied, with messages forwarded in both directions. The Container also automatically renews the activity timeout when WebSocket messages are sent or received.
 
-You can call the `containerFetch` method directly to establish WebSocket connections:
-
 ```typescript
 // Connect to a WebSocket on port 9000
-const response = await container.containerFetch(request, 9000);
+const response = await container.fetch(switchPort(request, 9000));
 ```
 
-By default `fetch` also will do this by calling `containerFetch`.
+Note websockets are not supported with `containerFetch`.
 
 ### Container Configuration Example
 
-You can configure how the container starts by setting the instance properties for environment variables, entrypoint, and network access:
+You can configure defaults for how the container starts by setting the instance properties for environment variables, entrypoint, and network access:
 
 ```typescript
 import { Container } from '@cloudflare/containers';
@@ -251,6 +333,8 @@ export class ConfiguredContainer extends Container {
   // when the container starts
 }
 ```
+
+You can also set these on a per-instance basis with `start` or `startAnbdWaitForPorts`
 
 ### Multiple Ports and Custom Routing
 
@@ -414,13 +498,3 @@ export default {
   },
 };
 ```
-
-### Using getContainer
-
-This package includes a `getContainer` helper which returns a container instance
-stub.
-
-The first argument is the Container's Durable Object namespace. The second argument is
-optional and is a "name" for the Durable Object. This will be used to generate an ID,
-then return a specific Container instance (Durable Object instance). If no second argument
-is given, the name "cf-singleton-container" is used.
