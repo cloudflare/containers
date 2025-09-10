@@ -22,17 +22,7 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies and run tests for all fixtures
-        run: |
-          for fixture in fixtures/*/; do
-            if [ -f "$fixture/package.json" ]; then
-              echo "Installing dependencies for $fixture"
-              cd "$fixture"
-              npm install
-              echo "Running tests for $fixture"
-              npm run test
-              cd - > /dev/null
-            fi
-          done
+        run: npm run test
         timeout-minutes: 10
         
         
@@ -54,7 +44,7 @@ jobs:
 
       - name: Type check all fixtures
         run: |
-          for fixture in fixtures/*/; do
+          for fixture in examples/*/; do
             if [ -f "$fixture/tsconfig.json" ]; then
               echo "Type checking $fixture"
               cd "$fixture"
