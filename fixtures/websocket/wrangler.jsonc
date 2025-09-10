@@ -1,0 +1,30 @@
+{
+  "name": "containers-test-fixture",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-04-03",
+  "observability": {
+    "enabled": true,
+  },
+  "containers": [
+    {
+      "image": "./Dockerfile",
+      "class_name": "WebSocketTestContainer",
+      "name": "test-container",
+      "max_instances": 2,
+    },
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "class_name": "WebSocketTestContainer",
+        "name": "CONTAINER",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["WebSocketTestContainer"],
+    },
+  ],
+}
