@@ -1,7 +1,7 @@
 import type { Container } from './container';
 
 /**
- * Get a random container instances across N instances
+ * Get a random container instances across N instances. This is useful for load balancing.
  * @param binding The Container's Durable Object binding
  * @param instances Number of instances to load balance across
  * @returns A promise resolving to a container stub ready to handle requests
@@ -37,18 +37,18 @@ export async function loadBalance<T extends Container>(
   return getRandom(binding, instances);
 }
 
+export const singletonContainerId = 'cf-singleton-container';
 /**
  * Get a container stub
  * @param binding The Container's Durable Object binding
  * @param name The name of the instance to get, uses 'cf-singleton-container' by default
  * @returns A container stub ready to handle requests
  */
-export const singletonContainerId = 'cf-singleton-container';
 export function getContainer<T extends Container>(
   binding: DurableObjectNamespace<T>,
-  name?: string
+  name = singletonContainerId
 ): DurableObjectStub<T> {
-  const objectId = binding.idFromName(name ?? singletonContainerId);
+  const objectId = binding.idFromName(name);
   return binding.get(objectId);
 }
 

@@ -67,7 +67,8 @@ export class WranglerDevRunner {
       await fetch(this.url + '/stop?id=' + id);
     }
     // give it a second to run the onStop hook before we kill the process
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
     this.process.kill('SIGTERM');
 
     // Wait a bit for the process to finish

@@ -285,45 +285,21 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   // ==========================
 
   /**
-   * Start the container if it's not running and set up monitoring
+   * Start the container if it's not running and set up monitoring and lifecycle hooks,
+   * without waiting for ports to be ready.
    *
-   * This method handles the core container startup process without waiting for ports to be ready.
-   * It will automatically retry if the container fails to start, up to maxTries attempts.
+   * It will automatically retry if the container fails to start, using the specified waitOptions
    *
-   * It's useful when you need to:
-   * - Start a container without blocking until a port is available
-   * - Initialize a container that doesn't expose ports
-   * - Perform custom port availability checks separately
-   *
-   * The method applies the container configuration from your instance properties by default, but allows
-   * overriding these values for this specific startup:
-   * - Environment variables (defaults to this.envVars)
-   * - Custom entrypoint commands (defaults to this.entrypoint)
-   * - Internet access settings (defaults to this.enableInternet)
-   *
-   * It also sets up monitoring to track container lifecycle events and automatically
-   * calls the onStop handler when the container terminates.
    *
    * @example
-   * // Basic usage in a custom Container implementation
-   * async customInitialize() {
-   *   // Start the container without waiting for a port
-   *   await this.start();
-   *
-   *   // Perform additional initialization steps
-   *   // that don't require port access
-   * }
-   *
-   * @example
-   * // Start with custom configuration
    * await this.start({
    *   envVars: { DEBUG: 'true', NODE_ENV: 'development' },
    *   entrypoint: ['npm', 'run', 'dev'],
    *   enableInternet: false
    * });
    *
-   * @param options - Optional configuration to override instance defaults
-   * @param waitOptions - Optional wait configuration with abort signal for cancellation
+   * @param startOptions - Override `envVars`, `entrypoint` and `enableInternet` on a per-instance basis
+   * @param waitOptions - Optional wait configuration with abort signal for cancellation. Default ~8s timeout.
    * @returns A promise that resolves when the container start command has been issued
    * @throws Error if no container context is available or if all start attempts fail
    */
@@ -355,24 +331,15 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   }
 
   /**
-   * Start the container and wait for ports to be available
+   * Start the container and wait for ports to be available.
    *
-   * This method builds on start() by adding port availability verification:
-   * 1. Calls start() to ensure the container is running
-   * 2. If no ports are specified and requiredPorts is not set, it uses defaultPort (if set)
-   * 3. If no ports can be determined, it calls onStart and renewActivityTimeout immediately
-   * 4. For each specified port, it polls until the port is available or maxTries is reached
-   * 5. When all ports are available, it triggers onStart and renewActivityTimeout
-   *
-   * The method prioritizes port sources in this order:
-   * 1. Ports specified directly in the method call
-   * 2. requiredPorts class property (if set)
-   * 3. defaultPort (if neither of the above is specified)
+   * For each specified port, it polls until the port is available or `cancellationOptions.portReadyTimeoutMS` is reached.
    *
    * @param ports - The ports to wait for (if undefined, uses requiredPorts or defaultPort)
-   * @param cancellationOptions
-   * @param startOptions Override configuration on a per instance for env vars, entrypoint command and internet access
-   * @throws Error if port checks fail after maxTries attempts
+   * @param cancellationOptions - Options to configure timeouts, polling intereva, and abort signal
+   * @param startOptions Override configuration on a per-instance basis for env vars, entrypoint command and internet access
+   * @returns A promise that resolves when the container has been started and the ports are listening
+   * @throws Error if port checks fail after the specified timeout or if the container fails to start.
    */
   public async startAndWaitForPorts(args: StartAndWaitForPortsOptions): Promise<void>;
   public async startAndWaitForPorts(
@@ -497,7 +464,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
           try {
             await this.onError(
               new Error(
-                `Container crashed while checking for ports, did you setup the entrypoint correctly?`
+                `Container crashed while checking for ports, did you start the container and setup the entrypoint correctly?`
               )
             );
           } catch {}
@@ -532,15 +499,16 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   // =======================
 
   /**
-   * Shuts down the container.
+   * Send a signal to the container.
    * @param signal - The signal to send to the container (default: 15 for SIGTERM)
    */
   public async stop(signal: Signal | SignalInteger = 'SIGTERM'): Promise<void> {
     this.container.signal(typeof signal === 'string' ? signalToNumbers[signal] : signal);
+    // await this.syncPendingStoppedEvents();
   }
 
   /**
-   * Destroys the container. It will trigger onError instead of onStop.
+   * Destroys the container with a SIGKILL. Triggers onStop.
    */
   public async destroy(): Promise<void> {
     await this.container.destroy();
@@ -565,7 +533,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
   /**
    * Lifecycle method called when the container is running, and the activity timeout
-   * expiration has been reached.
+   * expiration (set by `sleepAfter`) has been reached.
    *
    * If you want to shutdown the container, you should call this.stop() here
    *
@@ -605,7 +573,10 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   // ==================
 
   /**
-   * Schedule a task to be executed in the future
+   * Schedule a task to be executed in the future.
+   *
+   * We strongly recommend using this instead of the `alarm` handler.
+   *
    * @template T Type of the payload data
    * @param when When to execute the task (Date object or number of seconds delay)
    * @param callback Name of the method to call
@@ -680,19 +651,19 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
   /**
    * Send a request to the container (HTTP or WebSocket) using standard fetch API signature
-   * Based on containers-starter-go implementation
    *
-   * This method handles HTTP requests to the container. WebSocket requests done outside the DO*
-   * won't work until https://github.com/cloudflare/workerd/issues/2319 is addressed. Until then, please use `switchPort` + `fetch()`.
+   * This method handles HTTP requests to the container.
+   *
+   * WebSocket requests done outside the DO won't work until https://github.com/cloudflare/workerd/issues/2319 is addressed.
+   * Until then, please use `switchPort` + `fetch()`.
    *
    * Method supports multiple signatures to match standard fetch API:
    * - containerFetch(request: Request, port?: number)
    * - containerFetch(url: string | URL, init?: RequestInit, port?: number)
    *
-   * @param requestOrUrl The request object or URL string/object to send to the container
-   * @param portOrInit Port number or fetch RequestInit options
-   * @param portParam Optional port number when using URL+init signature
-   * @returns A Response from the container, or WebSocket connection
+   * Starts the container if not already running, and waits for the target port to be ready.
+   *
+   * @returns A Response from the container
    */
   public async containerFetch(
     requestOrUrl: Request | string | URL,
@@ -754,10 +725,10 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   }
 
   /**
-   * Handle fetch requests to the Container
-   * Default implementation forwards all HTTP and WebSocket requests to the container
-   * Override this in your subclass to specify a port or implement custom request handling
    *
+   * Fetch handler on the Container class.
+   * By default this forwards all requests to the container by calling `containerFetch`.
+   * Use `switchPort` to specify which port on the container to target, or this will use `defaultPort`.
    * @param request The request to handle
    */
   override async fetch(request: Request): Promise<Response> {
@@ -858,6 +829,14 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     return { request, port };
   }
 
+  /**
+   *
+   * The method prioritizes port sources in this order:
+   * 1. Ports specified directly in the method call
+   * 2. `requiredPorts` class property (if set)
+   * 3. `defaultPort` (if neither of the above is specified)
+   * 4. Falls back to port 33 if none of the above are set
+   */
   private async getPortsToCheck(overridePorts?: number | number[]) {
     let portsToCheck: number[] = [];
 
@@ -879,8 +858,10 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   //     CONTAINER INTERACTION & MONITORING
   // ===========================================
 
-  // Tries to start a container if it's not running
-  // Reutns the number of tries used
+  /**
+   * Tries to start a container if it's not already running
+   * Returns the number of tries used
+   */
   private async startContainerIfNotRunning(
     waitOptions: WaitOptions,
     options?: ContainerStartConfigOptions
