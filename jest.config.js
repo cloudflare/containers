@@ -6,6 +6,9 @@ module.exports = {
   transform: {
     '^.+\\.ts$': ['ts-jest', { tsconfig: 'tsconfig.json' }]
   },
+  moduleNameMapper: {
+    '^cloudflare:workers$': '<rootDir>/src/tests/__mocks__/cloudflare-workers.js'
+  },
   collectCoverage: true,
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov'],

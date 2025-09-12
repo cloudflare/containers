@@ -41,6 +41,20 @@ export interface ContainerOptions {
 
   /** Whether to enable internet access for the container */
   enableInternet?: boolean;
+
+  /**
+   * R2 bucket bindings configuration
+   * Provides R2 API access within containers via environment variables and runtime bindings
+   * Each binding creates environment variables for the container:
+   * - R2_{BINDING_NAME}_BINDING: the binding name for API access
+   * - R2_{BINDING_NAME}_BUCKET: the bucket name
+   */
+  r2Bindings?: Array<{
+    /** Name of the R2 binding variable for API access */
+    binding: string;
+    /** Name of the R2 bucket to bind */
+    bucketName: string;
+  }>;
 }
 
 /**
