@@ -24,6 +24,7 @@ import { Container, getContainer, getRandom } from '@cloudflare/containers';
 export class MyContainer extends Container {
   // Configure default port for the container
   defaultPort = 8080;
+  // After 1 minute of no new activity, shutdown the container
   sleepAfter = '1m';
 }
 
@@ -57,12 +58,35 @@ The `Container` class that extends a container-enbled Durable Object to provide 
 
 #### Properties
 
-- `defaultPort?`: Optional default port to use when communicating with the container. If not set, you must specify port like `fetch(switchPort(req, 8080))` or `containerFetch(req, 8080)`.
-- `requiredPorts?`: Array of ports that should be checked for availability during container startup. Used by `startAndWaitForPorts` when no specific ports are provided.
-- `sleepAfter`: How long to keep the container alive without activity (format: number for seconds, or string like "5m", "30s", "1h")
-- `env`: Environment variables to pass to the container (Record<string, string>) when starting up. These are the defaults but can be overriden on a per-instance basis when starting.
-- `entrypoint?`: Custom entrypoint to override container default (string[]). These are the defaults but can be overriden on a per-instance basis when starting.
-- `enableInternet`: Whether to enable internet access for the container (boolean, default: `true`). These are the defaults but can be overriden on a per-instance basis when starting.
+- `defaultPort?`
+
+  Optional default port to use when communicating with the container. If this is not set, or you want to target a specific port on your container, you can specify the port with `fetch(switchPort(req, 8080))` or `containerFetch(req, 8080)`.
+
+- `requiredPorts?`
+
+  Array of ports that should be checked for availability during container startup. Used by `startAndWaitForPorts` when no specific ports are provided.
+
+- `sleepAfter`
+
+  How long to keep the container alive without activity (format: number for seconds, or string like "5m", "30s", "1h").
+
+  Defaults to "10m", meaning that after the Container class Durable Object receives no requests for 10 minutes, it will shut down the container.
+
+The following properties are used to set defaults when starting the container, but can be overriden on a per-instance basis by passing in values to `startAndWaitForPorts()` or `start()`.
+
+- `env?: Record<string, string>`
+
+  Environment variables to pass to the container when starting up.
+
+- `entrypoint?: string[]`
+
+  Specify an entrypoint to override image default.
+
+- `enableInternet: boolean`
+
+  Whether to enable internet access for the container.
+
+  Defaults to `true`.
 
 #### Methods
 
