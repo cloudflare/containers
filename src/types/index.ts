@@ -21,6 +21,18 @@ export interface ContainerMessage<T = unknown> {
 // Container state interface removed
 
 /**
+ * Secrets Store binding configuration
+ */
+export interface SecretsStoreBinding {
+  /** Name of the binding in your Worker environment */
+  binding: string;
+  /** ID of the secrets store */
+  storeId: string;
+  /** Name of the secret within the store */
+  secretName: string;
+}
+
+/**
  * Options for container configuration
  */
 export interface ContainerOptions {
@@ -41,6 +53,9 @@ export interface ContainerOptions {
 
   /** Whether to enable internet access for the container */
   enableInternet?: boolean;
+
+  /** Secrets Store bindings configuration */
+  secretsStoreBindings?: SecretsStoreBinding[];
 }
 
 /**
