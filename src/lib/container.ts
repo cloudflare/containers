@@ -217,6 +217,11 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   // The container won't get a SIGKILL if this threshold is triggered.
   sleepAfter: string | number = DEFAULT_SLEEP_AFTER;
 
+  // Hard timeout after which the container will be forcefully killed
+  // This timeout is absolute from container start time, regardless of activity
+  // When this timeout expires, the container is sent a SIGKILL signal
+  hardTimeout?: string | number;
+
   // Container configuration properties
   // Set these properties directly in your container instance
   envVars: ContainerStartOptions['env'] = {};
@@ -251,6 +256,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     if (options) {
       if (options.defaultPort !== undefined) this.defaultPort = options.defaultPort;
       if (options.sleepAfter !== undefined) this.sleepAfter = options.sleepAfter;
+      if (options.hardTimeout !== undefined) this.hardTimeout = options.hardTimeout;
     }
 
     // Create schedules table if it doesn't exist
@@ -548,6 +554,24 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   }
 
   /**
+   * Lifecycle method called when the container hard timeout expires.
+   * 
+   * This timeout is absolute from container start time, regardless of activity.
+   * When this timeout expires, the container will be forcefully killed with SIGKILL.
+   * 
+   * Override this method in subclasses to handle hard timeout events.
+   * By default, this method calls `this.destroy()` to forcefully kill the container.
+   */
+  public async onHardTimeoutExpired(): Promise<void> {
+    if (!this.container.running) {
+      return;
+    }
+
+    console.log(`Container hard timeout expired after ${this.hardTimeout}. Forcefully killing container.`);
+    await this.destroy();
+  }
+
+  /**
    * Error handler for container errors
    * Override this method in subclasses to handle container errors
    * @param error - The error that occurred
@@ -566,6 +590,18 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   public renewActivityTimeout() {
     const timeoutInMs = parseTimeExpression(this.sleepAfter) * 1000;
     this.sleepAfterMs = Date.now() + timeoutInMs;
+  }
+
+  /**
+   * Set up the hard timeout when the container starts
+   * This is called internally when the container starts
+   */
+  private setupHardTimeout() {
+    if (this.hardTimeout) {
+      const hardTimeoutMs = parseTimeExpression(this.hardTimeout) * 1000;
+      this.containerStartTime = Date.now();
+      this.hardTimeoutMs = this.containerStartTime + hardTimeoutMs;
+    }
   }
 
   // ==================
@@ -771,6 +807,8 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   private monitorSetup = false;
 
   private sleepAfterMs = 0;
+  private hardTimeoutMs?: number;
+  private containerStartTime?: number;
 
   // ==========================
   //     GENERAL HELPERS
@@ -928,6 +966,9 @@ export class Container<Env = unknown> extends DurableObject<Env> {
         await this.scheduleNextAlarm();
         this.container.start(startConfig);
         this.monitor = this.container.monitor();
+        
+        // Set up hard timeout when container starts
+        this.setupHardTimeout();
       } else {
         await this.scheduleNextAlarm();
       }
@@ -1126,6 +1167,12 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       return;
     }
 
+    // Check hard timeout first (takes priority over activity timeout)
+    if (this.isHardTimeoutExpired()) {
+      await this.onHardTimeoutExpired();
+      return;
+    }
+
     if (this.isActivityExpired()) {
       await this.onActivityExpired();
       // renewActivityTimeout makes sure we don't spam calls here
@@ -1133,8 +1180,11 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       return;
     }
 
-    // Math.min(3m or maxTime, sleepTimeout)
+    // Math.min(3m or maxTime, sleepTimeout, hardTimeout)
     minTime = Math.min(minTimeFromSchedules, minTime, this.sleepAfterMs);
+    if (this.hardTimeoutMs) {
+      minTime = Math.min(minTime, this.hardTimeoutMs);
+    }
     const timeout = Math.max(0, minTime - Date.now());
 
     // await a sleep for maxTime to keep the DO alive for
@@ -1270,5 +1320,9 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
   private isActivityExpired(): boolean {
     return this.sleepAfterMs <= Date.now();
+  }
+
+  private isHardTimeoutExpired(): boolean {
+    return this.hardTimeoutMs !== undefined && this.hardTimeoutMs <= Date.now();
   }
 }

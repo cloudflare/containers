@@ -33,6 +33,9 @@ export interface ContainerOptions {
   /** How long to keep the container alive without activity */
   sleepAfter?: string | number;
 
+  /** Hard timeout for container - kills container after this time regardless of activity */
+  hardTimeout?: string | number;
+
   /** Environment variables to pass to the container */
   envVars?: Record<string, string>;
 
