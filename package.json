@@ -33,7 +33,7 @@
   "license": "ISC",
   "devDependencies": {
     "@changesets/cli": "^2.29.6",
-    "@cloudflare/workers-types": "^4.20250620.0",
+    "@cloudflare/workers-types": "latest",
     "@types/jest": "^29.5.14",
     "@types/node": "^22.15.3",
     "@typescript-eslint/eslint-plugin": "^8.31.1",
@@ -44,7 +44,8 @@
     "ts-jest": "^29.3.2",
     "tsup": "^8.0.2",
     "typescript": "latest",
-    "vitest": "^1.0.0"
+    "vitest": "^1.0.0",
+    "wrangler": "latest"
   },
   "publishConfig": {
     "access": "public"
