@@ -69,18 +69,30 @@ export interface StartAndWaitForPortsOptions {
   cancellationOptions?: CancellationOptions;
 }
 
+/** cancellationOptions for startAndWaitForPorts()  */
 export interface CancellationOptions {
+  /** abort signal, use to abort startAndWaitForPorts manually. */
   abort?: AbortSignal;
+  /** max time to get container instance and start it (application inside may not be ready), in milliseconds */
   instanceGetTimeoutMS?: number;
+  /** max time to wait for application to be listening at all specified ports, in milliseconds. */
   portReadyTimeoutMS?: number;
+  /** time to wait between polling, in milliseconds */
   waitInterval?: number;
 }
 
+/**
+ * Options for waitForPort()
+ */
 export interface WaitOptions {
-  abort?: AbortSignal;
-  retries: number;
-  waitInterval: number;
+  /** The port number to check for readiness */
   portToCheck: number;
+  /** Optional AbortSignal, use this to abort waiting for ports */
+  signal?: AbortSignal;
+  /** Number of attempts to wait for port to be ready */
+  retries?: number;
+  /** Time to wait in between polling port for readiness, in milliseconds */
+  waitInterval?: number;
 }
 
 /**
