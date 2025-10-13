@@ -701,6 +701,10 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     // Create URL for the container request
     const containerUrl = request.url.replace('https:', 'http:');
 
+    // this stops the container from being shut down if the request take longer than the activity timeout
+    const keepAwake = setInterval(() => {
+      this.renewActivityTimeout();
+    }, parseTimeExpression(this.sleepAfter) * 1000/2);
     try {
       // Renew the activity timeout whenever a request is proxied
       this.renewActivityTimeout();
@@ -721,6 +725,8 @@ export class Container<Env = unknown> extends DurableObject<Env> {
         `Error proxying request to container: ${e instanceof Error ? e.message : String(e)}`,
         { status: 500 }
       );
+    } finally {
+      clearInterval(keepAwake);
     }
   }
 
