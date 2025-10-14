@@ -93,48 +93,11 @@ export interface WaitOptions {
 }
 
 /**
- * Represents a scheduled task within a Container
- * @template T Type of the payload data
- */
-export type Schedule<T = string> = {
-  /** Unique identifier for the schedule */
-  taskId: string;
-  /** Name of the method to be called */
-  callback: string;
-  /** Data to be passed to the callback */
-  payload: T;
-} & (
-  | {
-      /** Type of schedule for one-time execution at a specific time */
-      type: 'scheduled';
-      /** Timestamp when the task should execute */
-      time: number;
-    }
-  | {
-      /** Type of schedule for delayed execution */
-      type: 'delayed';
-      /** Timestamp when the task should execute */
-      time: number;
-      /** Number of seconds to delay execution */
-      delayInSeconds: number;
-    }
-);
-
-/**
  * Params sent to `onStop` method when the container stops
  */
 export type StopParams = {
   exitCode: number;
   reason: 'exit' | 'runtime_signal';
-};
-
-export type ScheduleSQL = {
-  id: string;
-  callback: string;
-  payload: string;
-  type: 'scheduled' | 'delayed';
-  time: number;
-  delayInSeconds?: number;
 };
 
 export type State = {
