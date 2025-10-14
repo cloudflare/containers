@@ -524,38 +524,21 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   //     HTTP
   // ============
 
-  /**
-   * Send a request to the container (HTTP or WebSocket) using standard fetch API signature
-   *
-   * This method handles HTTP requests to the container.
-   *
-   * WebSocket requests done outside the DO won't work until https://github.com/cloudflare/workerd/issues/2319 is addressed.
-   * Until then, please use `switchPort` + `fetch()`.
-   *
-   * Method supports multiple signatures to match standard fetch API:
-   * - containerFetch(request: Request, port?: number)
-   * - containerFetch(url: string | URL, init?: RequestInit, port?: number)
-   *
-   * Starts the container if not already running, and waits for the target port to be ready.
-   *
-   * @returns A Response from the container
-   */
-  public async containerFetch(
-    requestOrUrl: Request | string | URL,
-    portOrInit?: number | RequestInit,
-    portParam?: number
-  ): Promise<Response> {
-    // Parse the arguments based on their types to handle different method signatures
-    let { request, port } = this.requestAndPortFromContainerFetchArgs(
-      requestOrUrl,
-      portOrInit,
-      portParam
-    );
+  override async fetch(request: Request): Promise<Response> {
+    const portFromUrl = new URL(request.url).port;
+    const targetPort = this.defaultPort ?? (portFromUrl ? parseInt(portFromUrl) : undefined);
+    if (targetPort === undefined) {
+      throw new Error(
+        // TODO: update this with a docs url.
+        'No port configured for this container. Set the `defaultPort` in your Container subclass, or specify a port on your request url`.'
+      );
+    }
 
-    const state = await this.state.getState();
-    if (!this.container.running || state.status !== 'healthy') {
+    // start container
+    // TODO: check if in process of starting already...?
+    if (!this.container.running) {
       try {
-        await this.startAndWaitForPorts(port, { abort: request.signal });
+        await this.startAndWaitForPorts(targetPort, { abort: request.signal });
       } catch (e) {
         if (isNoInstanceError(e)) {
           return new Response(
@@ -571,58 +554,9 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       }
     }
 
-    const tcpPort = this.container.getTcpPort(port);
+    const tcpPort = this.container.getTcpPort(targetPort);
 
-    // Create URL for the container request
-    const containerUrl = request.url.replace('https:', 'http:');
-
-    try {
-      const res = await tcpPort.fetch(containerUrl, request);
-      return res;
-    } catch (e) {
-      if (!(e instanceof Error)) {
-        throw e;
-      }
-
-      // This error means that the container might've just restarted
-      if (e.message.includes('Network connection lost.')) {
-        return new Response('Container suddenly disconnected, try again', { status: 500 });
-      }
-
-      console.error(`Error proxying request to container ${this.ctx.id}:`, e);
-      return new Response(
-        `Error proxying request to container: ${e instanceof Error ? e.message : String(e)}`,
-        { status: 500 }
-      );
-    }
-  }
-
-  /**
-   *
-   * Fetch handler on the Container class.
-   * By default this forwards all requests to the container by calling `containerFetch`.
-   * Use `switchPort` to specify which port on the container to target, or this will use `defaultPort`.
-   * @param request The request to handle
-   */
-  override async fetch(request: Request): Promise<Response> {
-    if (this.defaultPort === undefined && !request.headers.has('cf-container-target-port')) {
-      throw new Error(
-        'No port configured for this container. Set the `defaultPort` in your Container subclass, or specify a port with `container.fetch(switchPort(request, port))`.'
-      );
-    }
-
-    let portValue = this.defaultPort;
-
-    if (request.headers.has('cf-container-target-port')) {
-      const portFromHeaders = parseInt(request.headers.get('cf-container-target-port') ?? '');
-      if (isNaN(portFromHeaders)) {
-        throw new Error('port value from switchPort is not a number');
-      } else {
-        portValue = portFromHeaders;
-      }
-    }
-    // Forward all requests (HTTP and WebSocket) to the container
-    return await this.containerFetch(request, portValue);
+    return await tcpPort.fetch(request.url.replace('https:', 'http:'), request);
   }
 
   // ===============================
@@ -640,73 +574,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   private monitor: Promise<unknown> | undefined;
 
   private monitorSetup = false;
-
-  // ==========================
-  //     GENERAL HELPERS
-  // ==========================
-
-  private requestAndPortFromContainerFetchArgs(
-    requestOrUrl: Request | string | URL,
-    portOrInit?: number | RequestInit,
-    portParam?: number
-  ): { request: Request; port: number } {
-    let request: Request;
-    let port: number | undefined;
-
-    // Determine if we're using the new signature or the old one
-    if (requestOrUrl instanceof Request) {
-      // Request-based: containerFetch(request, port?)
-      request = requestOrUrl;
-      port = typeof portOrInit === 'number' ? portOrInit : undefined;
-    } else {
-      // URL-based: containerFetch(url, init?, port?)
-      const url = typeof requestOrUrl === 'string' ? requestOrUrl : requestOrUrl.toString();
-      const init = typeof portOrInit === 'number' ? {} : portOrInit || {};
-      port =
-        typeof portOrInit === 'number'
-          ? portOrInit
-          : typeof portParam === 'number'
-            ? portParam
-            : undefined;
-
-      // Create a Request object
-      request = new Request(url, init);
-    }
-    port ??= this.defaultPort;
-    // Require a port to be specified, either as a parameter or as a defaultPort property
-    if (port === undefined) {
-      throw new Error(
-        'No port specified for container fetch. Set defaultPort or specify a port parameter.'
-      );
-    }
-
-    return { request, port };
-  }
-
-  /**
-   *
-   * The method prioritizes port sources in this order:
-   * 1. Ports specified directly in the method call
-   * 2. `requiredPorts` class property (if set)
-   * 3. `defaultPort` (if neither of the above is specified)
-   * 4. Falls back to port 33 if none of the above are set
-   */
-  private async getPortsToCheck(overridePorts?: number | number[]) {
-    let portsToCheck: number[] = [];
-
-    if (overridePorts !== undefined) {
-      // Use explicitly provided ports (single port or array)
-      portsToCheck = Array.isArray(overridePorts) ? overridePorts : [overridePorts];
-    } else if (this.requiredPorts && this.requiredPorts.length > 0) {
-      // Use requiredPorts class property if available
-      portsToCheck = [...this.requiredPorts];
-    } else {
-      // Fall back to defaultPort if available
-      portsToCheck = [this.defaultPort ?? FALLBACK_PORT_TO_CHECK];
-    }
-
-    return portsToCheck;
-  }
 
   // ===========================================
   //     CONTAINER INTERACTION & MONITORING
