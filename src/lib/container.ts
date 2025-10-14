@@ -2,15 +2,13 @@ import type {
   ContainerOptions,
   ContainerStartOptions,
   ContainerStartConfigOptions,
-  Schedule,
   StopParams,
-  ScheduleSQL,
   State,
   WaitOptions,
   CancellationOptions,
   StartAndWaitForPortsOptions,
 } from '../types';
-import { generateId, parseTimeExpression } from './helpers';
+import { parseTimeExpression } from './helpers';
 import { DurableObject } from 'cloudflare:workers';
 
 // ====================
@@ -26,10 +24,6 @@ const UNEXPECTED_EXIT_ERROR = 'container exited with unexpected exit code:';
 const NOT_LISTENING_ERROR = 'the container is not listening';
 const CONTAINER_STATE_KEY = '__CF_CONTAINER_STATE';
 
-// maxRetries before scheduling next alarm is purposely set to 3,
-// as according to DO docs at https://developers.cloudflare.com/durable-objects/api/alarms/
-// the maximum amount for alarm retries is 6.
-const MAX_ALARM_RETRIES = 3;
 const PING_TIMEOUT_MS = 5000;
 
 const DEFAULT_SLEEP_AFTER = '10m'; // Default sleep after inactivity time
@@ -239,10 +233,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     this.state = new ContainerState(this.ctx.storage);
 
     this.ctx.blockConcurrencyWhile(async () => {
-      this.renewActivityTimeout();
-
-      // First thing, schedule the next alarms
-      await this.scheduleNextAlarm();
+      await this.ctx.container?.setInactivityTimeout(parseTimeExpression(this.sleepAfter) * 1000);
     });
 
     this.container = ctx.container;
@@ -252,19 +243,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       if (options.defaultPort !== undefined) this.defaultPort = options.defaultPort;
       if (options.sleepAfter !== undefined) this.sleepAfter = options.sleepAfter;
     }
-
-    // Create schedules table if it doesn't exist
-    this.sql`
-      CREATE TABLE IF NOT EXISTS container_schedules (
-        id TEXT PRIMARY KEY NOT NULL DEFAULT (randomblob(9)),
-        callback TEXT NOT NULL,
-        payload TEXT,
-        type TEXT NOT NULL CHECK(type IN ('scheduled', 'delayed')),
-        time INTEGER NOT NULL,
-        delayInSeconds INTEGER,
-        created_at INTEGER DEFAULT (unixepoch())
-      )
-    `;
 
     if (this.container.running) {
       this.monitor = this.container.monitor();
@@ -375,9 +353,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
     // Determine which ports to check
     const portsToCheck = await this.getPortsToCheck(ports);
-
-    // trigger all onStop that we didn't do yet
-    await this.syncPendingStoppedEvents();
 
     // Prepare to start the container
     resolvedCancellationOptions ??= {};
@@ -503,10 +478,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
    * @param signal - The signal to send to the container (default: 15 for SIGTERM)
    */
   public async stop(signal: Signal | SignalInteger = 'SIGTERM'): Promise<void> {
-    if (this.container.running) {
-      this.container.signal(typeof signal === 'string' ? signalToNumbers[signal] : signal);
-    }
-    await this.syncPendingStoppedEvents();
+    this.container.signal(typeof signal === 'string' ? signalToNumbers[signal] : signal);
   }
 
   /**
@@ -524,6 +496,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     // Default implementation does nothing
   }
 
+  // TODO: update onStop to work with setInactivityTimeout
   /**
    * Lifecycle method called when container shuts down
    * Override this method in subclasses to handle Container stopped events
@@ -533,22 +506,9 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     // Default implementation does nothing
   }
 
-  /**
-   * Lifecycle method called when the container is running, and the activity timeout
-   * expiration (set by `sleepAfter`) has been reached.
-   *
-   * If you want to shutdown the container, you should call this.stop() here
-   *
-   * By default, this method calls `this.stop()`
-   */
-  public async onActivityExpired(): Promise<void> {
-    if (!this.container.running) {
-      return;
-    }
-
-    await this.stop();
-  }
-
+  // TODO: update onError to work with setInactivityTimeout
+  // (currently the DO can die while the container is running
+  //  which will drop the monitor promise )
   /**
    * Error handler for container errors
    * Override this method in subclasses to handle container errors
@@ -558,93 +518,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   public onError(error: unknown): any {
     console.error('Container error:', error);
     throw error;
-  }
-
-  /**
-   * Renew the container's activity timeout
-   *
-   * Call this method whenever there is activity on the container
-   */
-  public renewActivityTimeout() {
-    const timeoutInMs = parseTimeExpression(this.sleepAfter) * 1000;
-    this.sleepAfterMs = Date.now() + timeoutInMs;
-  }
-
-  // ==================
-  //     SCHEDULING
-  // ==================
-
-  /**
-   * Schedule a task to be executed in the future.
-   *
-   * We strongly recommend using this instead of the `alarm` handler.
-   *
-   * @template T Type of the payload data
-   * @param when When to execute the task (Date object or number of seconds delay)
-   * @param callback Name of the method to call
-   * @param payload Data to pass to the callback
-   * @returns Schedule object representing the scheduled task
-   */
-  public async schedule<T = string>(
-    when: Date | number,
-    callback: string,
-    payload?: T
-  ): Promise<Schedule<T>> {
-    const id = generateId(9);
-
-    // Ensure the callback is a string (method name)
-    if (typeof callback !== 'string') {
-      throw new Error('Callback must be a string (method name)');
-    }
-
-    // Ensure the method exists
-    if (typeof this[callback as keyof this] !== 'function') {
-      throw new Error(`this.${callback} is not a function`);
-    }
-
-    // Schedule based on the type of 'when' parameter
-    if (when instanceof Date) {
-      // Schedule for a specific time
-      const timestamp = Math.floor(when.getTime() / 1000);
-
-      this.sql`
-        INSERT OR REPLACE INTO container_schedules (id, callback, payload, type, time)
-        VALUES (${id}, ${callback}, ${JSON.stringify(payload)}, 'scheduled', ${timestamp})
-      `;
-
-      await this.scheduleNextAlarm();
-
-      return {
-        taskId: id,
-        callback: callback,
-        payload: payload as T,
-        time: timestamp,
-        type: 'scheduled',
-      };
-    }
-
-    if (typeof when === 'number') {
-      // Schedule for a delay in seconds
-      const time = Math.floor(Date.now() / 1000 + when);
-
-      this.sql`
-        INSERT OR REPLACE INTO container_schedules (id, callback, payload, type, delayInSeconds, time)
-        VALUES (${id}, ${callback}, ${JSON.stringify(payload)}, 'delayed', ${when}, ${time})
-      `;
-
-      await this.scheduleNextAlarm();
-
-      return {
-        taskId: id,
-        callback: callback,
-        payload: payload as T,
-        delayInSeconds: when,
-        time,
-        type: 'delayed',
-      };
-    }
-
-    throw new Error("Invalid schedule type. 'when' must be a Date or number of seconds");
   }
 
   // ============
@@ -704,8 +577,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     const containerUrl = request.url.replace('https:', 'http:');
 
     try {
-      // Renew the activity timeout whenever a request is proxied
-      this.renewActivityTimeout();
       const res = await tcpPort.fetch(containerUrl, request);
       return res;
     } catch (e) {
@@ -765,33 +636,14 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   // ==========================
 
   private container: NonNullable<DurableObject['ctx']['container']>;
-  // onStopCalled will be true when we are in the middle of an onStop call
-  private onStopCalled = false;
   private state: ContainerState;
   private monitor: Promise<unknown> | undefined;
 
   private monitorSetup = false;
 
-  private sleepAfterMs = 0;
-
   // ==========================
   //     GENERAL HELPERS
   // ==========================
-
-  /**
-   * Execute SQL queries against the Container's database
-   */
-  private sql<T = Record<string, string | number | boolean | null>>(
-    strings: TemplateStringsArray,
-    ...values: (string | number | boolean | null)[]
-  ) {
-    let query = '';
-    // Construct the SQL query with placeholders
-    query = strings.reduce((acc, str, i) => acc + str + (i < values.length ? '?' : ''), '');
-
-    // Execute the SQL query with the provided values
-    return [...this.ctx.storage.sql.exec(query, ...values)] as T[];
-  }
 
   private requestAndPortFromContainerFetchArgs(
     requestOrUrl: Request | string | URL,
@@ -899,7 +751,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       if (envVars && Object.keys(envVars).length > 0) startConfig.env = envVars;
       if (entrypoint) startConfig.entrypoint = entrypoint;
 
-      this.renewActivityTimeout();
       const handleError = async () => {
         const err = await this.monitor?.catch(err => err as Error);
 
@@ -926,16 +777,10 @@ export class Container<Env = unknown> extends DurableObject<Env> {
         await handleError();
       }
 
-      await this.scheduleNextAlarm();
-
       if (!this.container.running) {
         this.container.start(startConfig);
         this.monitor = this.container.monitor();
-      } else {
-        await this.scheduleNextAlarm();
       }
-
-      this.renewActivityTimeout();
 
       // TODO: Make this the port I'm trying to get!
       const port = this.container.getTcpPort(waitOptions.portToCheck);
@@ -990,6 +835,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     throw new Error(`Container did not start after ${totalTries * pollInterval}ms`);
   }
 
+  // TODO: we may need to update this to work with setinactivityTimeout
   private setupMonitorCallbacks() {
     if (this.monitorSetup) {
       return;
@@ -999,7 +845,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     this.monitor
       ?.then(async () => {
         await this.ctx.blockConcurrencyWhile(async () => {
-          await this.state.setStoppedWithCode(0);
+          await this.onStop({ exitCode: 0, reason: 'exit' });
         });
       })
       .catch(async (error: unknown) => {
@@ -1023,255 +869,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       })
       .finally(() => {
         this.monitorSetup = false;
-        if (this.timeout) {
-          if (this.resolve) this.resolve();
-          clearTimeout(this.timeout);
-        }
       });
-  }
-
-  deleteSchedules(name: string) {
-    this.sql`DELETE FROM container_schedules WHERE callback = ${name}`;
-  }
-
-  // ============================
-  //     ALARMS AND SCHEDULES
-  // ============================
-
-  /**
-   * Method called when an alarm fires
-   * Executes any scheduled tasks that are due
-   */
-
-  override async alarm(alarmProps: { isRetry: boolean; retryCount: number }): Promise<void> {
-    if (alarmProps.isRetry && alarmProps.retryCount > MAX_ALARM_RETRIES) {
-      const scheduleCount =
-        Number(this.sql`SELECT COUNT(*) as count FROM container_schedules`[0]?.count) || 0;
-      const hasScheduledTasks = scheduleCount > 0;
-      if (hasScheduledTasks || this.container.running) {
-        await this.scheduleNextAlarm();
-      }
-      return;
-    }
-
-    // do not remove this, container DOs ALWAYS need an alarm right now.
-    // The only way for this DO to stop having alarms is:
-    //  1. The container is not running anymore.
-    //  2. Activity expired and it exits.
-    const prevAlarm = Date.now();
-    await this.ctx.storage.setAlarm(prevAlarm);
-    await this.ctx.storage.sync();
-
-    // Get all schedules that should be executed now
-    const result = this.sql<{
-      id: string;
-      callback: string;
-      payload: string;
-      type: 'scheduled' | 'delayed';
-      time: number;
-    }>`
-         SELECT * FROM container_schedules;
-       `;
-    let minTime = Date.now() + 3 * 60 * 1000;
-
-    const now = Date.now() / 1000;
-    // Process each due schedule
-    for (const row of result) {
-      // check if we need to run it
-      if (row.time > now) {
-        continue;
-      }
-
-      const callback = this[row.callback as keyof this];
-      if (!callback || typeof callback !== 'function') {
-        console.error(`Callback ${row.callback} not found or is not a function`);
-        continue;
-      }
-
-      // Create a schedule object for context
-      const schedule = this.getSchedule(row.id);
-
-      try {
-        // Parse the payload and execute the callback
-        const payload = row.payload ? JSON.parse(row.payload) : undefined;
-
-        // Use context storage to execute the callback with proper 'this' binding
-        await callback.call(this, payload, await schedule);
-      } catch (e) {
-        console.error(`Error executing scheduled callback "${row.callback}":`, e);
-      }
-
-      // Delete the schedule after execution (one-time schedules)
-      this.sql`DELETE FROM container_schedules WHERE id = ${row.id}`;
-    }
-
-    const resultForMinTime = this.sql<{
-      id: string;
-      callback: string;
-      payload: string;
-      type: 'scheduled' | 'delayed';
-      time: number;
-    }>`
-         SELECT * FROM container_schedules;
-       `;
-    const minTimeFromSchedules = Math.min(...resultForMinTime.map(r => r.time * 1000));
-
-    // if not running and nothing to do, stop
-    if (!this.container.running) {
-      await this.syncPendingStoppedEvents();
-
-      if (resultForMinTime.length == 0) {
-        await this.ctx.storage.deleteAlarm();
-      } else {
-        await this.ctx.storage.setAlarm(minTimeFromSchedules);
-      }
-
-      return;
-    }
-
-    if (this.isActivityExpired()) {
-      await this.onActivityExpired();
-      // renewActivityTimeout makes sure we don't spam calls here
-      this.renewActivityTimeout();
-      return;
-    }
-
-    // Math.min(3m or maxTime, sleepTimeout)
-    minTime = Math.min(minTimeFromSchedules, minTime, this.sleepAfterMs);
-    const timeout = Math.max(0, minTime - Date.now());
-
-    // await a sleep for maxTime to keep the DO alive for
-    // at least this long
-    await new Promise<void>(resolve => {
-      this.resolve = resolve;
-      if (!this.container.running) {
-        resolve();
-        return;
-      }
-
-      this.timeout = setTimeout(() => {
-        resolve();
-      }, timeout);
-    });
-
-    await this.ctx.storage.setAlarm(Date.now());
-
-    // we exit and we have another alarm,
-    // the next alarm is the one that decides if it should stop the loop.
-  }
-
-  timeout?: ReturnType<typeof setTimeout>;
-  resolve?: () => void;
-
-  // synchronises container state with the container source of truth to process events
-  private async syncPendingStoppedEvents() {
-    const state = await this.state.getState();
-    if (!this.container.running && state.status === 'healthy') {
-      await this.callOnStop({ exitCode: 0, reason: 'exit' });
-      return;
-    }
-
-    if (!this.container.running && state.status === 'stopped_with_code') {
-      await this.callOnStop({ exitCode: state.exitCode ?? 0, reason: 'exit' });
-      return;
-    }
-  }
-
-  private async callOnStop(onStopParams: StopParams) {
-    if (this.onStopCalled) {
-      return;
-    }
-
-    this.onStopCalled = true;
-    const promise = this.onStop(onStopParams);
-    if (promise instanceof Promise) {
-      await promise.finally(() => {
-        this.onStopCalled = false;
-      });
-    } else {
-      this.onStopCalled = false;
-    }
-
-    await this.state.setStopped();
-  }
-
-  /**
-   * Schedule the next alarm based on upcoming tasks
-   */
-  public async scheduleNextAlarm(ms = 1000): Promise<void> {
-    const nextTime = ms + Date.now();
-
-    // if not already set
-    if (this.timeout) {
-      if (this.resolve) this.resolve();
-      clearTimeout(this.timeout);
-    }
-
-    await this.ctx.storage.setAlarm(nextTime);
-    await this.ctx.storage.sync();
-  }
-
-  async listSchedules<T = string>(name: string): Promise<Schedule<T>[]> {
-    const result = this.sql<ScheduleSQL>`
-      SELECT * FROM container_schedules WHERE callback = ${name} LIMIT 1
-    `;
-
-    if (!result || result.length === 0) {
-      return [];
-    }
-
-    return result.map(this.toSchedule<T>);
-  }
-
-  private toSchedule<T = string>(schedule: ScheduleSQL): Schedule<T> {
-    let payload: T;
-    try {
-      payload = JSON.parse(schedule.payload) as T;
-    } catch (e) {
-      console.error(`Error parsing payload for schedule ${schedule.id}:`, e);
-      payload = undefined as unknown as T;
-    }
-
-    if (schedule.type === 'delayed') {
-      return {
-        taskId: schedule.id,
-        callback: schedule.callback,
-        payload,
-        type: 'delayed',
-        time: schedule.time,
-        delayInSeconds: schedule.delayInSeconds!,
-      };
-    }
-
-    return {
-      taskId: schedule.id,
-      callback: schedule.callback,
-      payload,
-      type: 'scheduled',
-      time: schedule.time,
-    };
-  }
-
-  /**
-   * Get a scheduled task by ID
-   * @template T Type of the payload data
-   * @param id ID of the scheduled task
-   * @returns The Schedule object or undefined if not found
-   */
-  async getSchedule<T = string>(id: string): Promise<Schedule<T> | undefined> {
-    const result = this.sql<ScheduleSQL>`
-      SELECT * FROM container_schedules WHERE id = ${id} LIMIT 1
-    `;
-
-    if (!result || result.length === 0) {
-      return undefined;
-    }
-
-    const schedule = result[0];
-    return this.toSchedule(schedule);
-  }
-
-  private isActivityExpired(): boolean {
-    return this.sleepAfterMs <= Date.now();
   }
 }
