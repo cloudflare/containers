@@ -20,10 +20,6 @@ const PING_TIMEOUT_MS = 5000;
 const DEFAULT_SLEEP_AFTER = '10m'; // Default sleep after inactivity time
 const INSTANCE_POLL_INTERVAL_MS = 300; // Default interval for polling container state
 
-// Timeout for getting container instance and launching a VM
-// Time to find an instance, attach a DO, call start, but NOT
-// the time for the app the actually start
-
 // If user has specified no ports and we need to check one
 // to see if the container is up at all.
 const FALLBACK_PORT_TO_CHECK = 33;
@@ -259,7 +255,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   }): Promise<void> {
     options.waitForReady ??= true;
     if (this.container.running && options.waitForReady === false) {
-      console.log('should not be here');
       return;
     }
 
@@ -414,7 +409,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       );
     }
 
-    // should this ping the container if running already?
     await this.start({ portToCheck: targetPort, waitForReady: true, signal: request.signal });
 
     const tcpPort = this.container.getTcpPort(targetPort);
