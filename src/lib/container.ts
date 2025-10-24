@@ -920,12 +920,13 @@ export class Container<Env = unknown> extends DurableObject<Env> {
         }
       };
 
-      if (!this.container.running) {
-        if (tries > 0) {
-          await handleError();
-        }
+      if (tries > 0 && !this.container.running) {
+        await handleError();
+      }
 
-        await this.scheduleNextAlarm();
+      await this.scheduleNextAlarm();
+
+      if (!this.container.running) {
         this.container.start(startConfig);
         this.monitor = this.container.monitor();
       } else {
