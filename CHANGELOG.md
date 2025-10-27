@@ -1,5 +1,11 @@
 # @cloudflare/containers
 
+## 0.0.30
+
+### Patch Changes
+
+- 33faed8: calling `stop()` on a container that is not running should not send another stop signal
+
 ## 0.0.29
 
 ### Patch Changes
