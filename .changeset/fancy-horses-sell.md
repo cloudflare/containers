@@ -2,4 +2,4 @@
 '@cloudflare/containers': patch
 ---
 
-do not call signal() if the container is stopped
+calling `stop()` on a container that is not running should not send another stop signal
