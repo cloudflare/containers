@@ -2,17 +2,6 @@ import type { ContainerOptions, ContainerStartOptions, StopParams, State } from 
 import { parseTimeExpression } from './helpers';
 import { DurableObject } from 'cloudflare:workers';
 
-// ====================
-// ====================
-//      CONSTANTS
-// ====================
-// ====================
-
-const NO_CONTAINER_INSTANCE_ERROR =
-  'there is no container instance that can be provided to this durable object';
-const RUNTIME_SIGNALLED_ERROR = 'runtime signalled the container to exit:';
-const UNEXPECTED_EXIT_ERROR = 'container exited with unexpected exit code:';
-const NOT_LISTENING_ERROR = 'the container is not listening';
 const CONTAINER_STATE_KEY = '__CF_CONTAINER_STATE';
 
 const PING_TIMEOUT_MS = 5000;
@@ -45,27 +34,34 @@ function isErrorOfType(e: unknown, matchingString: string): boolean {
   return errorString.toLowerCase().includes(matchingString);
 }
 
+const NO_CONTAINER_INSTANCE_ERROR =
+  'there is no container instance that can be provided to this durable object';
+
+/** we can retry start */
 const isNoInstanceError = (error: unknown): boolean =>
   isErrorOfType(error, NO_CONTAINER_INSTANCE_ERROR);
-const isRuntimeSignalledError = (error: unknown): boolean =>
-  isErrorOfType(error, RUNTIME_SIGNALLED_ERROR);
+
+const NOT_LISTENING_ERROR = 'the container is not listening';
 const isNotListeningError = (error: unknown): boolean => isErrorOfType(error, NOT_LISTENING_ERROR);
-const isContainerExitNonZeroError = (error: unknown): boolean =>
-  isErrorOfType(error, UNEXPECTED_EXIT_ERROR);
 
 /**
- * Combines the existing user-defined signal with a signal that aborts after the timeout specified by waitInterval
+ * Combines the existing user-defined signal with a signal that aborts after the timeout specified by waitInterval.
+ * If there is no userProvidedSignal, this is just a timeout
  */
-function addTimeoutSignal(existingSignal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+function addTimeoutSignals(
+  userProvidedSignal: AbortSignal | undefined,
+  timeoutMs: number
+): AbortSignal {
   const controller = new AbortController();
 
-  existingSignal?.addEventListener('abort', () => controller.abort());
-
-  // Add timeout
+  // Add timeout in case our pings hang
   const timeoutId = setTimeout(() => controller.abort('ping timed out'), timeoutMs);
 
-  // Clean up timeout if signal is aborted early
-  controller.signal.addEventListener('abort', () => clearTimeout(timeoutId));
+  // If the user signal aborts, we want to cancel the timeout and clean up
+  userProvidedSignal?.addEventListener('abort', () => {
+    controller.abort();
+    clearTimeout(timeoutId);
+  });
 
   // note the timeout aborting does not clear the existing signal
   return controller.signal;
@@ -188,9 +184,10 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       if (options.sleepAfter !== undefined) this.sleepAfter = options.sleepAfter;
     }
 
-    if (this.container.running) {
-      this.monitor ??= this.setupMonitorCallbacks();
-    }
+    // we are not setting up a global monitor because we cannot guarantee the DO will be alive when the container stops
+    // if (this.container.running) {
+    //   this.monitor ??= this.setupMonitorCallbacks();
+    // }
   }
   /**
    * Gets the current state of the container
@@ -198,6 +195,26 @@ export class Container<Env = unknown> extends DurableObject<Env> {
    */
   async getState(): Promise<State> {
     return { ...(await this.state.getState()) };
+  }
+
+  /**
+   *
+   * Returns a promise that resolves when the container is ready.
+   * By default readiness is defined as being able to successfully fetch 'http://ping' on the specified port.
+   *
+   * This can be overriden by the user and will be called when starting the container
+   *
+   * If called by us, this will receive a port to check, which might be the target port of a fetch if this was called during fetch.
+   * The user could choose to ignore this port, or check other ports as well.
+   * It will also receive an abort signal which is a combination of a user provided signal and a timeout signal.
+   *
+   * If called by the user it won't receive these parameters :/
+   *
+   */
+  public async readinessCheck(portToCheck?: number, signal?: AbortSignal): Promise<void> {
+    await this.container
+      .getTcpPort(portToCheck ?? FALLBACK_PORT_TO_CHECK)
+      .fetch('http://ping', { signal });
   }
 
   /**
@@ -249,19 +266,27 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       return;
     }
 
-    // we will race the ping interval timeout against this
+    // we use a timeout so there is a bit of a cooldown between retries
+    // but we still want to abort immediately if the user has requested it,
+    // so we create this promise that we can race against our timeout.
     const userSignalPromise = new Promise<void>(res => {
       options.signal?.addEventListener('abort', () => {
         res();
       });
     });
 
+    // if start was called via fetch, we will have a port passed in
+    // a user can also specify a port when calling start
+    // otherwise we fall back to the defaultPort property set on this instance and then a hardcoded fallback
     const portToCheck = options.portToCheck ?? this.defaultPort ?? FALLBACK_PORT_TO_CHECK;
 
+    // we need to know if the last attempt to start resulted in a instance error.
+    // this is the only time we should try to restart the container.
+    // if the container has been started once and isn't running with any other error, we should throw
+    let lastError: Error | undefined = undefined;
     let attempt = 0;
-    let lastError: Error | undefined = undefined; // only if cloudchamberd gives us a no instance error
-    const initiallyRunning = this.container.running; // checks if we need to trigger onStart
-    let startupMonitor: Promise<void> | undefined; // we need different callbacks for this particular monitor.
+    const initiallyRunning = this.container.running; // so we don't call onStart if it was already running
+    let startupMonitor: Promise<void> | undefined;
 
     while (attempt < options.retries) {
       if (options.signal?.aborted) {
@@ -277,32 +302,30 @@ export class Container<Env = unknown> extends DurableObject<Env> {
         });
         lastError = undefined;
       }
-      // TODO: confirm you can register multiple monitor promises
       startupMonitor ??= this.container.monitor();
 
-      const combinedSignal = addTimeoutSignal(options.signal, options.pingTimeoutMs);
+      // combine the user provided AbortSignal with a timeout
+
       try {
-        // in the future this could be a user defined healthcheck
-        await this.container
-          .getTcpPort(portToCheck)
-          .fetch('http://ping', { signal: combinedSignal });
+        // by default this pings the container
+        const timeoutSignal = addTimeoutSignals(options.signal, options.pingTimeoutMs);
+        await this.readinessCheck(portToCheck, timeoutSignal);
         break;
       } catch (e) {
         if (this.container.running) {
-          if (!options.waitForReady && !isNotListeningError(e)) {
+          // return if the user has specified that we don't need to wait for the container application to be ready
+          if (isNotListeningError(e) && !options.waitForReady) {
             break;
           }
+          // otherwise fallthrough to retry the ping...
         } else {
+          // we tried to start the container but it is now not running
           await startupMonitor.catch(async err => {
-            // this is the only case where we want to retry,
-            // as a new instance might become available
-            if (isNoInstanceError(err) && attempt < options.retries!) {
+            // if the error is cloudchamberd not providing a container in time, we can retry
+            if (isNoInstanceError(err)) {
               lastError = err;
             } else {
-              await this.ctx.blockConcurrencyWhile(async () => {
-                await this.onError(err);
-              });
-              // assume the container crashed and give up
+              // for any other reason, we should assume the container crashed and give up
               throw err;
             }
           });
@@ -311,6 +334,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
         console.debug('The container was not ready:', e instanceof Error ? e.message : String(e));
 
+        // we are out of retries
         if (attempt === options.retries) {
           if (e instanceof Error && e.message.includes('Network connection lost')) {
             // We have to abort here, the reasoning is that we might've found
@@ -321,8 +345,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
             // durable object so it retries to reconnect from scratch.
             this.ctx.abort();
           }
-          // we are out of retries. if we are here the container must have started because otherwise we would have thrown earlier
-          throw new Error('The container application did not become ready in time.');
+          throw e;
         }
       }
 
@@ -334,12 +357,15 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       attempt++;
     }
 
+    // we have successfully exited the start loop
     if (initiallyRunning === false) {
       await this.ctx.blockConcurrencyWhile(async () => {
         await this.onStart();
       });
     }
-    this.monitor ??= this.setupMonitorCallbacks();
+
+    // we are not setting up a global monitor because we cannot guarantee the DO will be alive when the container stops
+    // this.monitor ??= this.setupMonitorCallbacks();
   }
 
   // =======================
@@ -351,11 +377,14 @@ export class Container<Env = unknown> extends DurableObject<Env> {
    * @param signal - The signal to send to the container (default: 15 for SIGTERM)
    */
   public async stop(signal: Signal | SignalInteger = 'SIGTERM'): Promise<void> {
+    if (!this.container.running) {
+      return;
+    }
     this.container.signal(typeof signal === 'string' ? signalToNumbers[signal] : signal);
   }
 
   /**
-   * Destroys the container with a SIGKILL. Triggers onStop.
+   * Destroys the container with a SIGKILL.
    */
   public async destroy(): Promise<void> {
     await this.container.destroy();
@@ -369,34 +398,35 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     // Default implementation does nothing
   }
 
-  // TODO: update onStop to work with setInactivityTimeout
-  /**
-   * Lifecycle method called when container shuts down
-   * Override this method in subclasses to handle Container stopped events
-   * @param params - Object containing exitCode and reason for the stop
-   */
-  public onStop(_: StopParams): void | Promise<void> {
-    // Default implementation does nothing
-  }
+  // We are not implementing onStop for now because there is no guarantee the DO will be alive when the container stops
+  // and we don't have a way for cloudchamberd to wake up the DO
+  // /**
+  //  * Lifecycle method called when container shuts down
+  //  * Override this method in subclasses to handle Container stopped events
+  //  * @param params - Object containing exitCode and reason for the stop
+  //  */
+  // public onStop(_: StopParams): void | Promise<void> {
+  //   // Default implementation does nothing
+  // }
 
-  // TODO: update onError to work with setInactivityTimeout
-  // (currently the DO can die while the container is running
-  //  which will drop the monitor promise )
+  // We are not implementing onStop for now because there is no guarantee the DO will be alive when the container stops
+  // and we don't have a way for cloudchamberd to wake up the DO
   /**
    * Error handler for container errors
    * Override this method in subclasses to handle container errors
    * @param error - The error that occurred
    * @returns Can return any value or throw the error
    */
-  public onError(error: unknown): any {
-    console.error('Container error:', error);
-    throw error;
-  }
+  // public onError(error: unknown): any {
+  //   console.error('Container error:', error);
+  //   throw error;
+  // }
 
   // ============
   //     HTTP
   // ============
 
+  // this should not be overridden by the user
   override async fetch(request: Request): Promise<Response> {
     const portFromUrl = new URL(request.url).port;
     const targetPort = this.defaultPort ?? (portFromUrl ? parseInt(portFromUrl) : undefined);
@@ -414,45 +444,35 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     return await tcpPort.fetch(request.url.replace('https:', 'http:'), request);
   }
 
-  // ===============================
-  // ===============================
-  //     PRIVATE METHODS & ATTRS
-  // ===============================
-  // ===============================
-
-  // ==========================
-  //     PRIVATE ATTRIBUTES
-  // ==========================
-
-  private container: NonNullable<DurableObject['ctx']['container']>;
+  public container: NonNullable<DurableObject['ctx']['container']>;
   private state: ContainerState;
-  private monitor: Promise<unknown> | undefined;
 
-  // ===========================================
-  //     CONTAINER INTERACTION & MONITORING
-  // ===========================================
+  // we are not setting up a global monitor because we cannot guarantee the DO will be alive when the container stops
+  // private monitor: Promise<unknown> | undefined;
 
-  // TODO: we may need to update this to work with setinactivityTimeout
-  /** use this rather than calling monitor directly. */
-  private async setupMonitorCallbacks() {
-    return this.container
-      .monitor()
-      .then(async () => {
-        await this.ctx.blockConcurrencyWhile(async () => {
-          await this.onStop({ exitCode: 0, reason: 'exit' });
-        });
-      })
-      .catch(async (error: unknown) => {
-        await this.ctx.blockConcurrencyWhile(async () => {
-          await this.onError(error);
-        });
-        if (isNoInstanceError(error)) {
-          // we will inform later (TODO: why?? when??)
-          return;
-        }
-      })
-      .finally(() => {
-        this.monitor = undefined;
-      });
-  }
+  // we are not setting up a global monitor because we cannot guarantee the DO will be alive when the container stops
+  // private async setupMonitorCallbacks() {
+  //   return (
+  //     this.container
+  //       .monitor()
+  //       .then(async () => {
+  //         await this.ctx.blockConcurrencyWhile(async () => {
+  //           await this.onStop({ exitCode: 0, reason: 'exit' });
+  //         });
+  //       })
+  //       .catch(async (error: unknown) => {
+  //         await this.ctx.blockConcurrencyWhile(async () => {
+  //           await this.onError(error);
+  //         });
+  //         if (isNoInstanceError(error)) {
+  //           // we will inform later (TODO: why?? when??)
+  //           return;
+  //         }
+  //       })
+  //       //
+  //       .finally(() => {
+  //         this.monitor = undefined;
+  //       })
+  //   );
+  // }
 }
