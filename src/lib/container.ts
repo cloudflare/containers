@@ -107,11 +107,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     });
 
     this.container = ctx.container;
-
-    // we are not setting up a global monitor because we cannot guarantee the DO will be alive when the container stops
-    // if (this.container.running) {
-    //   this.monitor ??= this.setupMonitorCallbacks();
-    // }
   }
   /**
    * Gets the current state of the container
@@ -273,7 +268,8 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       });
     }
 
-    // we are not setting up a global monitor because we cannot guarantee the DO will be alive when the container stops
+    // we are not setting up a monitor because we cannot guarantee the DO will be alive when the container stops
+    // but we will want to in the future
     // this.monitor ??= this.setupMonitorCallbacks();
   }
 
@@ -302,30 +298,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   public onStart(): void | Promise<void> {
     // Default implementation does nothing
   }
-
-  // We are not implementing onStop for now because there is no guarantee the DO will be alive when the container stops
-  // and we don't have a way for cloudchamberd to wake up the DO
-  // /**
-  //  * Lifecycle method called when container shuts down
-  //  * Override this method in subclasses to handle Container stopped events
-  //  * @param params - Object containing exitCode and reason for the stop
-  //  */
-  // public onStop(_: StopParams): void | Promise<void> {
-  //   // Default implementation does nothing
-  // }
-
-  // We are not implementing onStop for now because there is no guarantee the DO will be alive when the container stops
-  // and we don't have a way for cloudchamberd to wake up the DO
-  /**
-   * Error handler for container errors
-   * Override this method in subclasses to handle container errors
-   * @param error - The error that occurred
-   * @returns Can return any value or throw the error
-   */
-  // public onError(error: unknown): any {
-  //   console.error('Container error:', error);
-  //   throw error;
-  // }
+  // We will implement onStop and onError when cloudchamberd can reach out to the DO
 
   // this should not be overridden by the user
   override async fetch(request: Request): Promise<Response> {
@@ -343,33 +316,4 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
     return await tcpPort.fetch(request.url.replace('https:', 'http:'), request);
   }
-
-  // we are not setting up a global monitor because we cannot guarantee the DO will be alive when the container stops
-  // private monitor: Promise<unknown> | undefined;
-
-  // we are not setting up a global monitor because we cannot guarantee the DO will be alive when the container stops
-  // private async setupMonitorCallbacks() {
-  //   return (
-  //     this.container
-  //       .monitor()
-  //       .then(async () => {
-  //         await this.ctx.blockConcurrencyWhile(async () => {
-  //           await this.onStop({ exitCode: 0, reason: 'exit' });
-  //         });
-  //       })
-  //       .catch(async (error: unknown) => {
-  //         await this.ctx.blockConcurrencyWhile(async () => {
-  //           await this.onError(error);
-  //         });
-  //         if (isNoInstanceError(error)) {
-  //           // we will inform later (TODO: why?? when??)
-  //           return;
-  //         }
-  //       })
-  //       //
-  //       .finally(() => {
-  //         this.monitor = undefined;
-  //       })
-  //   );
-  // }
 }
