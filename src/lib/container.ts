@@ -1,8 +1,6 @@
-import type { ContainerOptions, ContainerStartOptions, StopParams, State } from '../types';
+import type { ContainerStartOptions, Signal, SignalInteger, State } from '../types';
 import { parseTimeExpression } from './helpers';
 import { DurableObject } from 'cloudflare:workers';
-
-const CONTAINER_STATE_KEY = '__CF_CONTAINER_STATE';
 
 const PING_TIMEOUT_MS = 5000;
 
@@ -13,8 +11,6 @@ const INSTANCE_POLL_INTERVAL_MS = 300; // Default interval for polling container
 // to see if the container is up at all.
 const FALLBACK_PORT_TO_CHECK = 33;
 
-export type Signal = 'SIGKILL' | 'SIGINT' | 'SIGTERM';
-export type SignalInteger = number;
 const signalToNumbers: Record<Signal, SignalInteger> = {
   SIGINT: 2,
   SIGTERM: 15,
@@ -29,20 +25,21 @@ const signalToNumbers: Record<Signal, SignalInteger> = {
 
 // ==== Error helpers ====
 
+const MAX_INSTANCES_ERROR = 'Maximum number of running container instances exceeded';
+
+const NO_CONTAINER_INSTANCE_ERROR =
+  'there is no container instance that can be provided to this durable object';
+
+const NOT_LISTENING_ERROR = 'the container is not listening';
+
 function isErrorOfType(e: unknown, matchingString: string): boolean {
   const errorString = e instanceof Error ? e.message : String(e);
   return errorString.toLowerCase().includes(matchingString);
 }
 
-const NO_CONTAINER_INSTANCE_ERROR =
-  'there is no container instance that can be provided to this durable object';
-
-/** we can retry start */
-const isNoInstanceError = (error: unknown): boolean =>
-  isErrorOfType(error, NO_CONTAINER_INSTANCE_ERROR);
-
-const NOT_LISTENING_ERROR = 'the container is not listening';
-const isNotListeningError = (error: unknown): boolean => isErrorOfType(error, NOT_LISTENING_ERROR);
+function retryableError(e: unknown): boolean {
+  return isErrorOfType(e, NO_CONTAINER_INSTANCE_ERROR) || isErrorOfType(e, MAX_INSTANCES_ERROR);
+}
 
 /**
  * Combines the existing user-defined signal with a signal that aborts after the timeout specified by waitInterval.
@@ -65,71 +62,6 @@ function addTimeoutSignals(
 
   // note the timeout aborting does not clear the existing signal
   return controller.signal;
-}
-
-// ===============================
-//     CONTAINER STATE WRAPPER
-// ===============================
-
-/**
- * ContainerState is a wrapper around a DO storage to store and get
- * the container state.
- * It's useful to track which kind of events have been handled by the user,
- * a transition to a new state won't be successful unless the user's hook has been
- * triggered and waited for.
- * A user hook might be repeated multiple times if they throw errors.
- */
-class ContainerState {
-  status?: State;
-  constructor(private storage: DurableObject['ctx']['storage']) {}
-
-  async setRunning() {
-    await this.setStatusAndupdate('running');
-  }
-
-  async setHealthy() {
-    await this.setStatusAndupdate('healthy');
-  }
-
-  async setStopping() {
-    await this.setStatusAndupdate('stopping');
-  }
-
-  async setStopped() {
-    await this.setStatusAndupdate('stopped');
-  }
-
-  async setStoppedWithCode(exitCode: number) {
-    this.status = { status: 'stopped_with_code', lastChange: Date.now(), exitCode };
-    await this.update();
-  }
-
-  async getState(): Promise<State> {
-    if (!this.status) {
-      const state = await this.storage.get<State>(CONTAINER_STATE_KEY);
-      if (!state) {
-        this.status = {
-          status: 'stopped',
-          lastChange: Date.now(),
-        };
-        await this.update();
-      } else {
-        this.status = state;
-      }
-    }
-
-    return this.status!;
-  }
-
-  private async setStatusAndupdate(status: State['status']) {
-    this.status = { status: status, lastChange: Date.now() };
-    await this.update();
-  }
-
-  private async update() {
-    if (!this.status) throw new Error('status should be init');
-    await this.storage.put<State>(CONTAINER_STATE_KEY, this.status);
-  }
 }
 
 // ===============================
@@ -156,12 +88,12 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   envVars: ContainerStartOptions['env'] = {};
   entrypoint: ContainerStartOptions['entrypoint'];
   enableInternet: ContainerStartOptions['enableInternet'] = true;
-
+  public container: NonNullable<DurableObject['ctx']['container']>;
   // =========================
   //     PUBLIC INTERFACE
   // =========================
 
-  constructor(ctx: DurableObject['ctx'], env: Env, options?: ContainerOptions) {
+  constructor(ctx: DurableObject['ctx'], env: Env) {
     super(ctx, env);
 
     if (ctx.container === undefined) {
@@ -170,19 +102,11 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       );
     }
 
-    this.state = new ContainerState(this.ctx.storage);
-
     this.ctx.blockConcurrencyWhile(async () => {
       await this.ctx.container?.setInactivityTimeout(parseTimeExpression(this.sleepAfter) * 1000);
     });
 
     this.container = ctx.container;
-
-    // Apply options if provided
-    if (options) {
-      if (options.defaultPort !== undefined) this.defaultPort = options.defaultPort;
-      if (options.sleepAfter !== undefined) this.sleepAfter = options.sleepAfter;
-    }
 
     // we are not setting up a global monitor because we cannot guarantee the DO will be alive when the container stops
     // if (this.container.running) {
@@ -191,30 +115,11 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   }
   /**
    * Gets the current state of the container
-   * @returns Promise<State>
    */
-  async getState(): Promise<State> {
-    return { ...(await this.state.getState()) };
-  }
-
-  /**
-   *
-   * Returns a promise that resolves when the container is ready.
-   * By default readiness is defined as being able to successfully fetch 'http://ping' on the specified port.
-   *
-   * This can be overriden by the user and will be called when starting the container
-   *
-   * If called by us, this will receive a port to check, which might be the target port of a fetch if this was called during fetch.
-   * The user could choose to ignore this port, or check other ports as well.
-   * It will also receive an abort signal which is a combination of a user provided signal and a timeout signal.
-   *
-   * If called by the user it won't receive these parameters :/
-   *
-   */
-  public async readinessCheck(portToCheck?: number, signal?: AbortSignal): Promise<void> {
-    await this.container
-      .getTcpPort(portToCheck ?? FALLBACK_PORT_TO_CHECK)
-      .fetch('http://ping', { signal });
+  getState(): State {
+    return {
+      status: this.container.running ? ('running' as const) : ('stopped' as const),
+    };
   }
 
   /**
@@ -292,7 +197,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       if (options.signal?.aborted) {
         throw new Error('Container start aborted by user signal');
       }
-      if (!this.container.running && (attempt === 0 || isNoInstanceError(lastError))) {
+      if (!this.container.running && (attempt === 0 || retryableError(lastError))) {
         const resolvedEnvVars = options.envVars ?? this.envVars;
         const resolvedEntrypoint = options.entrypoint ?? this.entrypoint;
         this.container.start({
@@ -309,12 +214,16 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       try {
         // by default this pings the container
         const timeoutSignal = addTimeoutSignals(options.signal, options.pingTimeoutMs);
-        await this.readinessCheck(portToCheck, timeoutSignal);
+        await this.container
+          .getTcpPort(portToCheck)
+          .fetch('http://ping', { signal: timeoutSignal });
+
+        // the ping was successful, exit the loop
         break;
       } catch (e) {
         if (this.container.running) {
-          // return if the user has specified that we don't need to wait for the container application to be ready
-          if (isNotListeningError(e) && !options.waitForReady) {
+          // exit loop if the user has specified that we don't need to wait for the container application to be ready
+          if (isErrorOfType(e, NOT_LISTENING_ERROR) && !options.waitForReady) {
             break;
           }
           // otherwise fallthrough to retry the ping...
@@ -322,7 +231,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
           // we tried to start the container but it is now not running
           await startupMonitor.catch(async err => {
             // if the error is cloudchamberd not providing a container in time, we can retry
-            if (isNoInstanceError(err)) {
+            if (retryableError(err)) {
               lastError = err;
             } else {
               // for any other reason, we should assume the container crashed and give up
@@ -349,7 +258,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
         }
       }
 
-      // wait a bit before retrying
+      // Wait a bit before retrying
       await Promise.race([
         new Promise(res => setTimeout(res, INSTANCE_POLL_INTERVAL_MS)),
         userSignalPromise,
@@ -367,10 +276,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     // we are not setting up a global monitor because we cannot guarantee the DO will be alive when the container stops
     // this.monitor ??= this.setupMonitorCallbacks();
   }
-
-  // =======================
-  //     LIFECYCLE HOOKS
-  // =======================
 
   /**
    * Send a signal to the container.
@@ -422,17 +327,12 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   //   throw error;
   // }
 
-  // ============
-  //     HTTP
-  // ============
-
   // this should not be overridden by the user
   override async fetch(request: Request): Promise<Response> {
     const portFromUrl = new URL(request.url).port;
     const targetPort = this.defaultPort ?? (portFromUrl ? parseInt(portFromUrl) : undefined);
     if (targetPort === undefined) {
       throw new Error(
-        // TODO: update this with a docs url.
         'No port configured for this container. Set the `defaultPort` in your Container subclass, or specify a port on your request url`.'
       );
     }
@@ -443,9 +343,6 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
     return await tcpPort.fetch(request.url.replace('https:', 'http:'), request);
   }
-
-  public container: NonNullable<DurableObject['ctx']['container']>;
-  private state: ContainerState;
 
   // we are not setting up a global monitor because we cannot guarantee the DO will be alive when the container stops
   // private monitor: Promise<unknown> | undefined;
