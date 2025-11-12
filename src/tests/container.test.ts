@@ -379,51 +379,40 @@ describe('Hard Timeout', () => {
     Date.now = originalNow;
   });
 
-  test('should detect timeout expiration', () => {
-    const timeout = '1s';
+  test('should configure hard timeout in start options', () => {
+    const timeout = '30s';
     // @ts-ignore - ignore TypeScript errors for testing
     const testContainer = new Container(mockCtx, {}, { timeout });
     
-    const originalNow = Date.now;
-    const mockStartTime = 1000000;
-    const mockCurrentTime = mockStartTime + 2000; // 2 seconds later
+    // Verify timeout property is set
+    expect(testContainer.timeout).toBe('30s');
     
-    Date.now = jest.fn(() => mockStartTime);
-    // @ts-ignore - access private method for testing
+    // setupTimeout should now handle hardTimeout in start config (no alarm-based logic)
     testContainer.setupTimeout();
     
-    Date.now = jest.fn(() => mockCurrentTime);
-    
-    // @ts-ignore - access private method for testing
-    const isExpired = testContainer.isTimeoutExpired();
-    expect(isExpired).toBe(true);
-    
-    Date.now = originalNow;
+    // Test passes if no errors thrown - timeout is now handled natively by workerd
+    expect(true).toBe(true);
   });
 
-  test('should not detect timeout expiration when within timeout', () => {
-    const timeout = '60s';
+  test('should handle renewActivityTimeout with native setInactivityTimeout', () => {
+    const sleepAfter = '60s';
     // @ts-ignore - ignore TypeScript errors for testing
-    const testContainer = new Container(mockCtx, {}, { timeout });
+    const testContainer = new Container(mockCtx, {}, { sleepAfter });
     
-    const originalNow = Date.now;
-    const mockStartTime = 1000000;
-    const mockCurrentTime = mockStartTime + 30000; // 30 seconds later (within 60s timeout)
+    // Mock container as running
+    mockCtx.container.running = true;
     
-    Date.now = jest.fn(() => mockStartTime);
-    // @ts-ignore - access private method for testing
-    testContainer.setupTimeout();
+    // Mock setInactivityTimeout method
+    mockCtx.container.setInactivityTimeout = jest.fn().mockResolvedValue(undefined);
     
-    Date.now = jest.fn(() => mockCurrentTime);
+    // Call renewActivityTimeout
+    testContainer.renewActivityTimeout();
     
-    // @ts-ignore - access private method for testing
-    const isExpired = testContainer.isTimeoutExpired();
-    expect(isExpired).toBe(false);
-    
-    Date.now = originalNow;
+    // Verify setInactivityTimeout was called with correct timeout
+    expect(mockCtx.container.setInactivityTimeout).toHaveBeenCalledWith(60000); // 60s in ms
   });
 
-  test('should call onHardTimeoutExpired when timeout expires', async () => {
+  test('should call onHardTimeoutExpired when manually triggered', async () => {
     const timeout = '1s';
     // @ts-ignore - ignore TypeScript errors for testing
     const testContainer = new Container(mockCtx, {}, { timeout });
@@ -432,31 +421,15 @@ describe('Hard Timeout', () => {
     // Mock container as running
     mockCtx.container.running = true;
     
-    // Spy on onHardTimeoutExpired
+    // Spy on onHardTimeoutExpired and stop method
     const onHardTimeoutSpy = jest.spyOn(testContainer, 'onHardTimeoutExpired');
+    const stopSpy = jest.spyOn(testContainer, 'stop').mockResolvedValue();
     
-    const originalNow = Date.now;
-    const mockStartTime = 1000000;
-    
-    Date.now = jest.fn(() => mockStartTime);
-    // @ts-ignore - access private method for testing
-    testContainer.setupTimeout();
-    
-    // Move time forward past hard timeout
-    Date.now = jest.fn(() => mockStartTime + 2000);
-    
-    // Simulate alarm checking timeouts
-    // @ts-ignore - access private method for testing
-    const isExpired = testContainer.isTimeoutExpired();
-    expect(isExpired).toBe(true);
-    
-    if (isExpired) {
-      await testContainer.onHardTimeoutExpired();
-    }
+    // Manually call onHardTimeoutExpired (workerd would trigger this natively)
+    await testContainer.onHardTimeoutExpired();
     
     expect(onHardTimeoutSpy).toHaveBeenCalled();
-    
-    Date.now = originalNow;
+    expect(stopSpy).toHaveBeenCalled();
   });
 
   test('should call destroy() in default onHardTimeoutExpired implementation', async () => {

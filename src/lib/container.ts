@@ -554,12 +554,9 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   }
 
   /**
-   * Called when the timeout expires and the container needs to be stopped.
-   * This is a timeout that is absolute from container start time, regardless of activity.
-   * When this timeout expires, the container will be gracefully stopped.
-   * 
-   * Override this method in subclasses to handle timeout events.
-   * By default, this method calls `this.stop()` to gracefully stop the container.
+   * Called when the hard timeout expires.
+   * Override this method to handle timeout events.
+   * By default, calls `this.stop()` to gracefully stop the container.
    */
   public async onHardTimeoutExpired(): Promise<void> {
     if (!this.container.running) {
@@ -583,24 +580,22 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
   /**
    * Renew the container's activity timeout
-   *
-   * Call this method whenever there is activity on the container
    */
   public renewActivityTimeout() {
-    const timeoutInMs = parseTimeExpression(this.sleepAfter) * 1000;
-    this.sleepAfterMs = Date.now() + timeoutInMs;
+    if (this.container.running) {
+      const timeoutInMs = parseTimeExpression(this.sleepAfter) * 1000;
+      // Type assertion needed until @cloudflare/workers-types is updated
+      (this.container as any).setInactivityTimeout(timeoutInMs).catch((error: any) => {
+        console.error('Failed to set inactivity timeout:', error);
+      });
+    }
   }
 
   /**
-   * Set up the timeout when the container starts
-   * This is called internally when the container starts
+   * Set up timeouts when the container starts
    */
   private setupTimeout() {
-    if (this.timeout) {
-      const timeoutMs = parseTimeExpression(this.timeout) * 1000;
-      this.containerStartTime = Date.now();
-      this.timeoutMs = this.containerStartTime + timeoutMs;
-    }
+    this.renewActivityTimeout();
   }
 
   // ==================
@@ -805,9 +800,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
   private monitorSetup = false;
 
-  private sleepAfterMs = 0;
-  private timeoutMs?: number;
-  private containerStartTime?: number;
+  // Timeout properties removed - handled by workerd
 
   // ==========================
   //     GENERAL HELPERS
@@ -933,6 +926,13 @@ export class Container<Env = unknown> extends DurableObject<Env> {
 
       if (envVars && Object.keys(envVars).length > 0) startConfig.env = envVars;
       if (entrypoint) startConfig.entrypoint = entrypoint;
+      
+      // Add hardTimeout if configured
+      if (this.timeout) {
+        const hardTimeoutMs = parseTimeExpression(this.timeout) * 1000;
+        // Type assertion needed until @cloudflare/workers-types is updated
+        (startConfig as any).hardTimeout = hardTimeoutMs;
+      }
 
       this.renewActivityTimeout();
       const handleError = async () => {
@@ -1109,7 +1109,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     }>`
          SELECT * FROM container_schedules;
        `;
-    let minTime = Date.now() + 3 * 60 * 1000;
+    // minTime will be calculated later based on scheduled tasks
 
     const now = Date.now() / 1000;
     // Process each due schedule
@@ -1151,7 +1151,10 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     }>`
          SELECT * FROM container_schedules;
        `;
-    const minTimeFromSchedules = Math.min(...resultForMinTime.map(r => r.time * 1000));
+    // Calculate next scheduled task time, or default to 3 minutes if no tasks
+    const minTimeFromSchedules = resultForMinTime.length > 0 
+      ? Math.min(...resultForMinTime.map(r => r.time * 1000))
+      : Date.now() + 3 * 60 * 1000; // 3 minutes default
 
     // if not running and nothing to do, stop
     if (!this.container.running) {
@@ -1166,24 +1169,8 @@ export class Container<Env = unknown> extends DurableObject<Env> {
       return;
     }
 
-    // Check timeout first (takes priority over activity timeout)
-    if (this.isTimeoutExpired()) {
-      await this.onHardTimeoutExpired();
-      return;
-    }
-
-    if (this.isActivityExpired()) {
-      await this.onActivityExpired();
-      // renewActivityTimeout makes sure we don't spam calls here
-      this.renewActivityTimeout();
-      return;
-    }
-
-    // Math.min(3m or maxTime, sleepTimeout, timeout)
-    minTime = Math.min(minTimeFromSchedules, minTime, this.sleepAfterMs);
-    if (this.timeoutMs) {
-      minTime = Math.min(minTime, this.timeoutMs);
-    }
+    // Timeouts handled natively by workerd
+    const minTime = minTimeFromSchedules;
     const timeout = Math.max(0, minTime - Date.now());
 
     // await a sleep for maxTime to keep the DO alive for
@@ -1317,11 +1304,5 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     return this.toSchedule(schedule);
   }
 
-  private isActivityExpired(): boolean {
-    return this.sleepAfterMs <= Date.now();
-  }
-
-  private isTimeoutExpired(): boolean {
-    return this.timeoutMs !== undefined && this.timeoutMs <= Date.now();
-  }
+  // Timeout methods removed - handled by workerd
 }
