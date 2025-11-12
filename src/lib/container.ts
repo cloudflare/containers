@@ -585,9 +585,12 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     if (this.container.running) {
       const timeoutInMs = parseTimeExpression(this.sleepAfter) * 1000;
       // Type assertion needed until @cloudflare/workers-types is updated
-      (this.container as any).setInactivityTimeout(timeoutInMs).catch((error: any) => {
-        console.error('Failed to set inactivity timeout:', error);
-      });
+      const containerAny = this.container as any;
+      if (typeof containerAny.setInactivityTimeout === 'function') {
+        containerAny.setInactivityTimeout(timeoutInMs).catch((error: any) => {
+          console.error('Failed to set inactivity timeout:', error);
+        });
+      }
     }
   }
 
