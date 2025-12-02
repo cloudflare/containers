@@ -358,7 +358,7 @@ export class ConfiguredContainer extends Container {
 }
 ```
 
-You can also set these on a per-instance basis with `start` or `startAnbdWaitForPorts`
+You can also set these on a per-instance basis with `start` or `startAndWaitForPorts`
 
 ### Multiple Ports and Custom Routing
 
