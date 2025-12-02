@@ -1,5 +1,4 @@
-import { Container, getContainer, getRandom } from "@cloudflare/containers";
-import { Hono } from "hono";
+import { Container, getContainer } from '../../../src/index.js';
 
 interface Env {
   FUSEDemo: DurableObjectNamespace<FUSEDemo>;
@@ -12,23 +11,24 @@ interface Env {
 
 export class FUSEDemo extends Container<Env> {
   defaultPort = 8080;
-  sleepAfter = "10m";
-  envVars = {
-    AWS_ACCESS_KEY_ID: this.env.AWS_ACCESS_KEY_ID,
-    AWS_SECRET_ACCESS_KEY: this.env.AWS_SECRET_ACCESS_KEY,
-    BUCKET_NAME: this.env.R2_BUCKET_NAME,
-    BUCKET_PREFIX: this.env.R2_BUCKET_PREFIX,
-    R2_ACCOUNT_ID: this.env.R2_ACCOUNT_ID,
-  };
+  sleepAfter = '10m';
+
+  constructor(ctx: any, env: Env) {
+    super(ctx, env);
+
+    this.envVars = {
+      AWS_ACCESS_KEY_ID: env.AWS_ACCESS_KEY_ID,
+      AWS_SECRET_ACCESS_KEY: env.AWS_SECRET_ACCESS_KEY,
+      BUCKET_NAME: env.R2_BUCKET_NAME,
+      BUCKET_PREFIX: env.R2_BUCKET_PREFIX,
+      R2_ACCOUNT_ID: env.R2_ACCOUNT_ID,
+    };
+  }
 }
 
-const app = new Hono<{
-  Bindings: Env;
-}>();
-
-app.get("/", async (c) => {
-  const container = getContainer(c.env.FUSEDemo);
-  return await container.fetch(c.req.raw);
-});
-
-export default app;
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const container = getContainer(env.FUSEDemo);
+    return container.fetch(request);
+  },
+};
