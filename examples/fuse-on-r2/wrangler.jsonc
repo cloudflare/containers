@@ -1,0 +1,49 @@
+/**
+ * For more details on how to configure Wrangler, refer to:
+ * https://developers.cloudflare.com/workers/wrangler/configuration/
+ */
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "fuse-on-r2",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-12-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.1,
+    },
+  },
+  "vars": {
+    // Make sure to provide your AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY as secrets
+    // $ npx wrangler@latest secret put AWS_ACCESS_KEY_ID
+    // $ npx wrangler@latest secret put AWS_SECRET_ACCESS_KEY
+    "R2_BUCKET_NAME": "",
+    "R2_ACCOUNT_ID": "",
+    // Unset by default. Set this to only mount a specific prefix within the bucket.
+    "R2_BUCKET_PREFIX": "",
+  },
+  "containers": [
+    {
+      "class_name": "FUSEDemo",
+      "image": "./Dockerfile",
+      "max_instances": 10,
+    },
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "class_name": "FUSEDemo",
+        "name": "FUSEDemo",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "new_sqlite_classes": ["FUSEDemo"],
+      "tag": "v1",
+    },
+  ],
+  "upload_source_maps": true,
+}

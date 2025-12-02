@@ -1,0 +1,20 @@
+{
+  "name": "containers-fuse-on-r2",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "start": "wrangler dev",
+    "cf-typegen": "wrangler types"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "5.8.3",
+    "wrangler": "^4.47.0"
+  },
+  "dependencies": {
+    "@cloudflare/workers-types": "^4.20250620.0"
+  }
+}
