@@ -491,8 +491,8 @@ export class TimeoutContainer extends Container {
 ### Using Load Balancing
 
 This package includes a `getRandom` helper which routes requests to one of N instances.
-In the future, this will be automatically handled with smart by Cloudflare Containers
-with autoscaling set to true, but is not yet implemented.
+In the future, this will be automatically handled with resource-aware load balancing
+when autoscaling is set to true, but it is not yet implemented.
 
 ```typescript
 import { Container, getContainer, getRandom } from '@cloudflare/containers';
