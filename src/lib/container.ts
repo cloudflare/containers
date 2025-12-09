@@ -508,7 +508,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     }
 
     this.container.signal(typeof signal === 'string' ? signalToNumbers[signal] : signal);
-    // await this.syncPendingStoppedEvents();
+    await this.syncPendingStoppedEvents();
   }
 
   /**
