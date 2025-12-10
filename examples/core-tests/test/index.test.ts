@@ -23,7 +23,7 @@ describe('core functionality', () => {
       const responseText = await response.text();
       expect(responseText).toBe('Hello from test container! process.env.MESSAGE: default message');
 
-      await runner.stop([id]);
+      await runner.destroy([id]);
 
       const output = runner.getStdout();
 
@@ -52,7 +52,7 @@ describe('core functionality', () => {
       const responseText = await response.text();
 
       expect(responseText).toBe('Hello from test container! process.env.MESSAGE: default message');
-      await runner.stop([id]);
+      await runner.destroy([id]);
       const output = runner.getStdout();
       expect(output.match(/onStart hook called/g)).toHaveLength(1);
     });
@@ -70,7 +70,7 @@ describe('core functionality', () => {
       expect(responseText).toBe(
         'Hello from test container! process.env.MESSAGE: start with startAndWaitForPorts'
       );
-      await runner.stop([id]);
+      await runner.destroy([id]);
       const output = runner.getStdout();
       expect(output.match(/onStart hook called/g)).toHaveLength(1);
       const onStartIndex = output.indexOf('onStart hook called');
@@ -91,7 +91,7 @@ describe('core functionality', () => {
 
       expect(responseText).toBe('Hello from test container! process.env.MESSAGE: start with start');
 
-      await runner.stop([id]);
+      await runner.destroy([id]);
       const output = runner.getStdout();
 
       // we seem to call onStart when stopped -> running and running -> healthy
@@ -105,6 +105,34 @@ describe('core functionality', () => {
       const secondOnStartIndex = output.indexOf('onStart hook called', firstOnStartIndex + 1);
       expect(firstOnStartIndex).toBeLessThan(fetchRequestIndex);
       expect(fetchRequestIndex).toBeLessThan(secondOnStartIndex);
+    });
+
+    test('stop', async () => {
+      const runner = new WranglerDevRunner();
+
+      const url = await runner.getUrl();
+      const id = randomUUID();
+
+      await fetch(`${url}/start?id=${id}`);
+
+      const response = await fetch(`${url}/fetch?id=${id}`);
+      const responseText = await response.text();
+
+      expect(responseText).toBe('Hello from test container! process.env.MESSAGE: start with start');
+      let statusReq = await fetch(`${url}/status?id=${id}`);
+      let status = await statusReq.json();
+      expect(status.status).toBe('healthy');
+      await fetch(`${url}/stop?id=${id}`);
+      await vi.waitFor(
+        async () => {
+          statusReq = await fetch(`${url}/status?id=${id}`);
+          status = await statusReq.json();
+          expect(status.status).toBe('stopped');
+        },
+        { timeout: 5000 }
+      );
+      const output = runner.getStdout();
+      expect(output.match(/onStop hook called/g)).toHaveLength(1);
     });
   });
 
