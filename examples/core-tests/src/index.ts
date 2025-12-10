@@ -71,8 +71,13 @@ export default {
     if (url.pathname === '/fetchWithSwitchPort') {
       return container.fetch(switchPort(request, 8080));
     }
-    if (url.pathname === '/stop') {
+    if (url.pathname === '/destroy') {
       await container.destroy();
+      return new Response('Container killed');
+    }
+
+    if (url.pathname === '/stop') {
+      await container.stop();
       return new Response('Container stopping');
     }
     return new Response('Not Found');

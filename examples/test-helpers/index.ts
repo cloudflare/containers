@@ -62,9 +62,9 @@ export class WranglerDevRunner {
     return this.urlPromise;
   }
 
-  async stop(containerId?: string[]): Promise<void> {
+  async destroy(containerId?: string[]): Promise<void> {
     for (const id of containerId ?? []) {
-      await fetch(this.url + '/stop?id=' + id);
+      await fetch(this.url + '/destroy?id=' + id);
     }
     // give it a second to run the onStop hook before we kill the process
     await new Promise(resolve => setTimeout(resolve, 2000));

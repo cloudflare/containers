@@ -49,7 +49,7 @@ describe('WebSocket proxy functionality', () => {
       expect(messages[0]).toContain('WebSocket connected to container');
       expect(messages[1]).toContain('Echo from container: Hello from test');
 
-      await runner.stop([id]);
+      await runner.destroy([id]);
     });
   });
 });

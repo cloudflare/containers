@@ -19,3 +19,9 @@ server.on("exit", () => {
   console.log("Test server exiting");
 })
 
+process.on('SIGTERM', () => {
+  server.close(() => {
+    process.exit(0);
+  });
+});
+
