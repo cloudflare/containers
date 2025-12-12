@@ -200,7 +200,7 @@ class ContainerState {
 // ===============================
 // ===============================
 
-export class Container<Env = unknown> extends DurableObject<Env> {
+export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   // =========================
   //     Public Attributes
   // =========================
