@@ -11,7 +11,7 @@ import type {
   StartAndWaitForPortsOptions,
 } from '../types';
 import { generateId, parseTimeExpression } from './helpers';
-import { DurableObject, waitUntil } from 'cloudflare:workers';
+import { DurableObject } from 'cloudflare:workers';
 
 // ====================
 // ====================

@@ -52,3 +52,6 @@ jobs:
               cd - > /dev/null
             fi
           done
+        
+      - name: Build Package 
+        run: npm run build
