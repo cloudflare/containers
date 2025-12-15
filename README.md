@@ -88,6 +88,17 @@ The following properties are used to set defaults when starting the container, b
 
   Defaults to `true`.
 
+- `pingEndpoint: string`
+
+  Specify an endpoint the container class will hit to check if the underlying instance started.
+  This does not need to be set by the majority of people, only use it if you would like the container supervisor
+  to hit another endpoint in your container when it starts it.
+  Observe that `pingEndpoint` can include both the hostname and the path. You can
+  set `container/health`, meaning `"container"` will be the value passed along the `Host` header, and
+  `"/health"` the path.
+
+  Defaults to `ping`.
+
 #### Methods
 
 ##### Lifecycle Hooks
