@@ -30,4 +30,4 @@ jobs:
       - name: Build Package 
         run: npm run build
 
-      - run: npx pkg-pr-new publish
+      - run: npx pkg-pr-new publish --comment=update
