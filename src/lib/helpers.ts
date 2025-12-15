@@ -1,21 +1,4 @@
 /**
- * Generates a random ID of a specified length using a url-friendly alphabet
- * Can be run without node:crypto
- * @param length - The length of the ID to generate (default: 9)
- * @returns A random string ID
- */
-export function generateId(length = 9) {
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  const bytes = new Uint8Array(length);
-  crypto.getRandomValues(bytes);
-  let result = '';
-  for (let i = 0; i < length; i++) {
-    result += alphabet[bytes[i] % alphabet.length];
-  }
-  return result;
-}
-
-/**
  * Parse a time expression into seconds
  * @param timeExpression Time expression (number or string like "5m", "30s", "1h")
  * @returns Number of seconds

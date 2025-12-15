@@ -6,7 +6,7 @@
     "module": "ES2022",
     "moduleResolution": "bundler",
     "sourceMap": true,
-    "types": ["@cloudflare/workers-types", "node"],
+    "types": ["@cloudflare/workers-types/experimental", "node"],
     "moduleDetection": "force",
     "allowJs": true,
     "outDir": "dist",
