@@ -223,6 +223,14 @@ export class Container<Env = unknown> extends DurableObject<Env> {
   entrypoint: ContainerStartOptions['entrypoint'];
   enableInternet: ContainerStartOptions['enableInternet'] = true;
 
+  // pingEndpoint is the host and path value that the class will use to send a request to the container and check if the
+  // instance is ready.
+  //
+  // The user does not have to implement this route by any means,
+  // but it's still useful if you want to control the path that
+  // the Container class uses to send HTTP requests to.
+  pingEndpoint: string = 'ping';
+
   // =========================
   //     PUBLIC INTERFACE
   // =========================
@@ -448,7 +456,7 @@ export class Container<Env = unknown> extends DurableObject<Env> {
     for (let i = 0; i < tries; i++) {
       try {
         const combinedSignal = addTimeoutSignal(waitOptions.signal, PING_TIMEOUT_MS);
-        await tcpPort.fetch('http://ping', { signal: combinedSignal });
+        await tcpPort.fetch(`http://${this.pingEndpoint}`, { signal: combinedSignal });
 
         // Successfully connected to this port
         console.log(`Port ${port} is ready`);
