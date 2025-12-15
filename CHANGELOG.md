@@ -1,5 +1,11 @@
 # @cloudflare/containers
 
+## 0.0.31
+
+### Patch Changes
+
+- 32a0928: fix: correctly sync state when calling `stop()`
+
 ## 0.0.30
 
 ### Patch Changes

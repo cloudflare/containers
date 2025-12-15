@@ -40,7 +40,7 @@ describe('multiple ports functionality', () => {
       'Hello from test container server two! process.env.MESSAGE: start with startAndWaitForPorts'
     );
 
-    await runner.stop([id]);
+    await runner.destroy([id]);
   });
 
   test('startAndWaitForPorts should wait for all specified ports to be ready', async () => {
@@ -65,6 +65,6 @@ describe('multiple ports functionality', () => {
       'Hello from test container server two! process.env.MESSAGE: start with startAndWaitForPorts'
     );
 
-    await runner.stop([id]);
+    await runner.destroy([id]);
   });
 });

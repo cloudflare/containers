@@ -503,12 +503,10 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    * @param signal - The signal to send to the container (default: 15 for SIGTERM)
    */
   public async stop(signal: Signal | SignalInteger = 'SIGTERM'): Promise<void> {
-    if (!this.container.running) {
-      return;
+    if (this.container.running) {
+      this.container.signal(typeof signal === 'string' ? signalToNumbers[signal] : signal);
     }
-
-    this.container.signal(typeof signal === 'string' ? signalToNumbers[signal] : signal);
-    // await this.syncPendingStoppedEvents();
+    await this.syncPendingStoppedEvents();
   }
 
   /**

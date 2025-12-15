@@ -8,4 +8,3 @@ RUN echo '{"name": "test-container", "version": "1.0.0"}' > package.json
 COPY container_src/server.js server.js
 
 EXPOSE 8080
-STOPSIGNAL SIGINT
