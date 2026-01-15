@@ -1,5 +1,15 @@
 # @cloudflare/containers
 
+## 0.1.0
+
+### Minor Changes
+
+- 05e64b7: add pingEndpoint to configure the ping URL of the container class
+
+### Patch Changes
+
+- e503912: Add custom ping endpoint
+
 ## 0.0.31
 
 ### Patch Changes
