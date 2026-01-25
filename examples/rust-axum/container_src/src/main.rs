@@ -1,4 +1,5 @@
 use axum::{Router, response::IntoResponse, routing::get};
+use axum::extract::Path;
 use tokio::signal;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::trace::TraceLayer;
@@ -9,8 +10,8 @@ use std::env;
 use std::io;
 use std::net::SocketAddr;
 
-async fn handler() -> impl IntoResponse {
-    debug!("Handler called");
+async fn handler(id: Option<Path<String>>) -> impl IntoResponse {
+    debug!("Handler called, id: {:?}", id);
     let message = env::var("MESSAGE").unwrap_or_default();
     let instance_id = env::var("CLOUDFLARE_DURABLE_OBJECT_ID").unwrap_or_default();
 
@@ -39,6 +40,7 @@ async fn main() -> io::Result<()> {
     let app = Router::new()
         .route("/", get(handler))
         .route("/container", get(handler))
+        .route("/container/{id}", get(handler))
         .route("/error", get(error_handler))
         .layer(CatchPanicLayer::new())
         .layer(TraceLayer::new_for_http());
