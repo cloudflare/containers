@@ -1,12 +1,9 @@
 import { Container, getContainer } from '../../../src/index.js';
 
-interface Env {
-  FUSEDemo: DurableObjectNamespace<FUSEDemo>;
+interface Env extends Cloudflare.Env {
   AWS_ACCESS_KEY_ID: string;
   AWS_SECRET_ACCESS_KEY: string;
-  R2_BUCKET_NAME: string;
   R2_BUCKET_PREFIX: string;
-  R2_ACCOUNT_ID: string;
 }
 
 export class FUSEDemo extends Container<Env> {
