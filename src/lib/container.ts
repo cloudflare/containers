@@ -1,17 +1,17 @@
+import { DurableObject } from 'cloudflare:workers';
 import type {
-  ContainerOptions,
-  ContainerStartOptions,
-  ContainerStartConfigOptions,
-  Schedule,
-  StopParams,
-  ScheduleSQL,
-  State,
-  WaitOptions,
   CancellationOptions,
+  ContainerOptions,
+  ContainerStartConfigOptions,
+  ContainerStartOptions,
+  Schedule,
+  ScheduleSQL,
   StartAndWaitForPortsOptions,
+  State,
+  StopParams,
+  WaitOptions,
 } from '../types';
 import { generateId, parseTimeExpression } from './helpers';
-import { DurableObject } from 'cloudflare:workers';
 
 // ====================
 // ====================
@@ -24,6 +24,9 @@ const NO_CONTAINER_INSTANCE_ERROR =
 const RUNTIME_SIGNALLED_ERROR = 'runtime signalled the container to exit:';
 const UNEXPECTED_EXIT_ERROR = 'container exited with unexpected exit code:';
 const NOT_LISTENING_ERROR = 'the container is not listening';
+const MONITOR_FAILED_TO_FIND_CONTAINER_ERROR = 'monitor failed to find container';
+const CONTAINER_PORT_NOT_FOUND_ERROR = 'container port not found';
+const CONNECTION_REFUSED_ERROR = 'connection refused';
 const CONTAINER_STATE_KEY = '__CF_CONTAINER_STATE';
 
 // maxRetries before scheduling next alarm is purposely set to 3,
@@ -77,6 +80,16 @@ const isRuntimeSignalledError = (error: unknown): boolean =>
 const isNotListeningError = (error: unknown): boolean => isErrorOfType(error, NOT_LISTENING_ERROR);
 const isContainerExitNonZeroError = (error: unknown): boolean =>
   isErrorOfType(error, UNEXPECTED_EXIT_ERROR);
+
+// These errors can occur transiently in local dev while the container monitor is still
+// discovering the container instance / exposed ports. They should not crash the DO.
+const isTransientContainerStartupError = (error: unknown): boolean => {
+  return (
+    isErrorOfType(error, MONITOR_FAILED_TO_FIND_CONTAINER_ERROR) ||
+    isErrorOfType(error, CONTAINER_PORT_NOT_FOUND_ERROR) ||
+    isErrorOfType(error, CONNECTION_REFUSED_ERROR)
+  );
+};
 
 function getExitCodeFromError(error: unknown): number | null {
   if (!(error instanceof Error)) {
@@ -392,7 +405,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     const containerGetTimeout =
       resolvedCancellationOptions.instanceGetTimeoutMS ?? TIMEOUT_TO_GET_CONTAINER_MS;
     const pollInterval = resolvedCancellationOptions.waitInterval ?? INSTANCE_POLL_INTERVAL_MS;
-    let containerGetRetries = Math.ceil(containerGetTimeout / pollInterval);
+    const containerGetRetries = Math.ceil(containerGetTimeout / pollInterval);
 
     const waitOptions: WaitOptions = {
       signal: resolvedCancellationOptions.abort,
@@ -450,7 +463,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       });
     });
     const pollInterval = waitOptions.waitInterval ?? INSTANCE_POLL_INTERVAL_MS;
-    let tries = waitOptions.retries ?? Math.ceil(TIMEOUT_TO_GET_PORTS_MS / pollInterval);
+    const tries = waitOptions.retries ?? Math.ceil(TIMEOUT_TO_GET_PORTS_MS / pollInterval);
 
     // Try to connect to the port multiple times
     for (let i = 0; i < tries; i++) {
@@ -681,7 +694,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     portParam?: number
   ): Promise<Response> {
     // Parse the arguments based on their types to handle different method signatures
-    let { request, port } = this.requestAndPortFromContainerFetchArgs(
+    const { request, port } = this.requestAndPortFromContainerFetchArgs(
       requestOrUrl,
       portOrInit,
       portParam
@@ -692,7 +705,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       try {
         await this.startAndWaitForPorts(port, { abort: request.signal });
       } catch (e) {
-        if (isNoInstanceError(e)) {
+        if (isNoInstanceError(e) || isTransientContainerStartupError(e)) {
           return new Response(
             'There is no Container instance available at this time.\nThis is likely because you have reached your max concurrent instance count (set in wrangler config) or are you currently provisioning the Container.\nIf you are deploying your Container for the first time, check your dashboard to see provisioning status, this may take a few minutes.',
             { status: 503 }
@@ -911,6 +924,11 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       const handleError = async () => {
         const err = await this.monitor?.catch(err => err as Error);
 
+        // If monitoring hasn't produced an error, there's nothing to handle.
+        if (err === undefined) {
+          return;
+        }
+
         if (typeof err === 'number') {
           const toThrow = new Error(
             `Container exited before we could determine the container health, exit code: ${err}`
@@ -921,7 +939,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
           } catch {}
 
           throw toThrow;
-        } else if (!isNoInstanceError(err)) {
+        } else if (!isNoInstanceError(err) && !isTransientContainerStartupError(err)) {
           try {
             await this.onError(err);
           } catch {}
@@ -1011,8 +1029,10 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
         });
       })
       .catch(async (error: unknown) => {
-        if (isNoInstanceError(error)) {
-          // we will inform later
+        if (isNoInstanceError(error) || isTransientContainerStartupError(error)) {
+          // Transient local-dev errors can happen before the monitor discovers the instance.
+          // Reset monitor so the next start attempt can re-attach.
+          this.monitor = undefined;
           return;
         }
 
