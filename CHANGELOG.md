@@ -1,5 +1,12 @@
 # @cloudflare/containers
 
+## 0.1.1
+
+### Patch Changes
+
+- 5119cee: Fix operator precedence in port-ready timeout retry calculation
+- 38d9e29: Update container default `Env` to `Cloudflare.Env`
+
 ## 0.1.0
 
 ### Minor Changes
