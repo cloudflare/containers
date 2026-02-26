@@ -407,7 +407,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     // Check each port
 
     const totalPortReadyTries = Math.ceil(
-      resolvedCancellationOptions.portReadyTimeoutMS ?? TIMEOUT_TO_GET_PORTS_MS / pollInterval
+      (resolvedCancellationOptions.portReadyTimeoutMS ?? TIMEOUT_TO_GET_PORTS_MS) / pollInterval
     );
     let triesLeft = totalPortReadyTries - triesUsed;
 
