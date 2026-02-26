@@ -1033,6 +1033,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
           // Transient local-dev errors can happen before the monitor discovers the instance.
           // Reset monitor so the next start attempt can re-attach.
           this.monitor = undefined;
+          this.monitorSetup = false;
           return;
         }
 
