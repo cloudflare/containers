@@ -24,6 +24,7 @@ const NO_CONTAINER_INSTANCE_ERROR =
 const RUNTIME_SIGNALLED_ERROR = 'runtime signalled the container to exit:';
 const UNEXPECTED_EXIT_ERROR = 'container exited with unexpected exit code:';
 const NOT_LISTENING_ERROR = 'the container is not listening';
+const MONITOR_NOT_FOUND_ERROR = 'monitor failed to find container';
 const CONTAINER_STATE_KEY = '__CF_CONTAINER_STATE';
 
 // maxRetries before scheduling next alarm is purposely set to 3,
@@ -77,6 +78,8 @@ const isRuntimeSignalledError = (error: unknown): boolean =>
 const isNotListeningError = (error: unknown): boolean => isErrorOfType(error, NOT_LISTENING_ERROR);
 const isContainerExitNonZeroError = (error: unknown): boolean =>
   isErrorOfType(error, UNEXPECTED_EXIT_ERROR);
+const isMonitorNotFoundError = (error: unknown): boolean =>
+  isErrorOfType(error, MONITOR_NOT_FOUND_ERROR);
 
 function getExitCodeFromError(error: unknown): number | null {
   if (!(error instanceof Error)) {
@@ -921,7 +924,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
           } catch {}
 
           throw toThrow;
-        } else if (!isNoInstanceError(err)) {
+        } else if (!isNoInstanceError(err) && !isMonitorNotFoundError(err)) {
           try {
             await this.onError(err);
           } catch {}
