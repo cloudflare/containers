@@ -11,7 +11,7 @@ import type {
   StartAndWaitForPortsOptions,
 } from '../types';
 import { generateId, parseTimeExpression } from './helpers';
-import { DurableObject } from 'cloudflare:workers';
+import { DurableObject, WorkerEntrypoint } from 'cloudflare:workers';
 
 // ====================
 // ====================
@@ -48,6 +48,14 @@ const TIMEOUT_TO_GET_PORTS_MS = 20_000;
 // If user has specified no ports and we need to check one
 // to see if the container is up at all.
 const FALLBACK_PORT_TO_CHECK = 33;
+
+// Module-level registry mapping class name → outbound handlers.
+// Populated via the static setter on Container (at module evaluation time),
+// read by ContainerProxy at request time.
+const outboundHandlerRegistry = new Map<
+  string,
+  Record<string, (req: Request, ctx: OutboundHandlerContext) => Promise<Response> | Response>
+>();
 
 export type Signal = 'SIGKILL' | 'SIGINT' | 'SIGTERM';
 export type SignalInteger = number;
@@ -194,13 +202,59 @@ class ContainerState {
   }
 }
 
+type ContainerProxyOptions = {
+  enableInternet?: boolean;
+  containerId: string;
+  className: string;
+};
+
+export class ContainerProxy extends WorkerEntrypoint<unknown, ContainerProxyOptions> {
+  override async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    const handlers = outboundHandlerRegistry.get(this.ctx.props.className);
+    if (handlers && url.hostname in handlers) {
+      return handlers[url.hostname](request, {
+        containerId: this.ctx.props.containerId,
+      });
+    }
+
+    if (this.ctx.props.enableInternet) {
+      console.log('Enabled internet');
+      return fetch(request);
+    }
+
+    console.log('Origin is disalloweddd');
+    return new Response('Origin is disallowed', { status: 520 });
+  }
+}
+
 // ===============================
 // ===============================
 //     MAIN CONTAINER CLASS
 // ===============================
 // ===============================
+//
+
+export type OutboundHandlerContext = {
+  containerId: string;
+};
 
 export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
+  static get outboundHandlers():
+    | Record<string, (req: Request, ctx: OutboundHandlerContext) => Promise<Response> | Response>
+    | undefined {
+    return outboundHandlerRegistry.get(this.name);
+  }
+
+  static set outboundHandlers(
+    handlers: Record<
+      string,
+      (req: Request, ctx: OutboundHandlerContext) => Promise<Response> | Response
+    >
+  ) {
+    outboundHandlerRegistry.set(this.name, handlers);
+  }
+
   // =========================
   //     Public Attributes
   // =========================
@@ -254,6 +308,17 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     });
 
     this.container = ctx.container;
+    if ((this.constructor as typeof Container).outboundHandlers !== undefined) {
+      void this.container.interceptAllOutboundHttp(
+        this.ctx.exports.ContainerProxy({
+          props: {
+            enableInternet: false,
+            containerId: this.ctx.id.toString(),
+            className: this.constructor.name,
+          },
+        })
+      );
+    }
 
     // Apply options if provided
     if (options) {
