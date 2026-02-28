@@ -11,7 +11,7 @@ import type {
   StartAndWaitForPortsOptions,
 } from '../types';
 import { generateId, parseTimeExpression } from './helpers';
-import { DurableObject } from 'cloudflare:workers';
+import { DurableObject, WorkerEntrypoint } from 'cloudflare:workers';
 
 // ====================
 // ====================
@@ -48,6 +48,21 @@ const TIMEOUT_TO_GET_PORTS_MS = 20_000;
 // If user has specified no ports and we need to check one
 // to see if the container is up at all.
 const FALLBACK_PORT_TO_CHECK = 33;
+
+export type OutboundHandler<E = Cloudflare.Env> = (
+  req: Request,
+  env: E,
+  ctx: OutboundHandlerContext
+) => Promise<Response> | Response;
+
+// class name to named proxy methods (includes the default outboundProxy)
+const outboundProxiesRegistry = new Map<string, Record<string, OutboundHandler>>();
+
+// class name to default catch-all proxy method name in outboundProxiesRegistry
+const defaultProxyNameRegistry = new Map<string, string>();
+
+// class name to hostname to default handler function
+const outboundHandlerRegistry = new Map<string, Record<string, OutboundHandler>>();
 
 export type Signal = 'SIGKILL' | 'SIGINT' | 'SIGTERM';
 export type SignalInteger = number;
@@ -194,13 +209,98 @@ class ContainerState {
   }
 }
 
+type ContainerProxyOptions = {
+  enableInternet?: boolean;
+  containerId: string;
+  className: string;
+  handlerOverrides?: Record<string, string>;
+  proxyOverride?: string;
+};
+
+export class ContainerProxy extends WorkerEntrypoint<Cloudflare.Env, ContainerProxyOptions> {
+  static register() {}
+
+  override async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    const { className, containerId, handlerOverrides, proxyOverride, enableInternet } =
+      this.ctx.props;
+    const proxies = outboundProxiesRegistry.get(className);
+    const ctx: OutboundHandlerContext = { containerId };
+
+    // Runtime handler override takes priority over static outboundHandlers
+    const overrideMethodName = handlerOverrides?.[url.hostname];
+    if (overrideMethodName && proxies?.[overrideMethodName]) {
+      return proxies[overrideMethodName](request, this.env, ctx);
+    }
+
+    // Static outboundHandlers
+    const handlers = outboundHandlerRegistry.get(className);
+    if (handlers && url.hostname in handlers) {
+      return handlers[url.hostname](request, this.env, ctx);
+    }
+
+    // Runtime catch-all proxy override
+    if (proxyOverride && proxies?.[proxyOverride]) {
+      return proxies[proxyOverride](request, this.env, ctx);
+    }
+
+    // Default catch-all proxy (static outboundProxy)
+    const defaultProxyName = defaultProxyNameRegistry.get(className);
+    if (defaultProxyName && proxies?.[defaultProxyName]) {
+      return proxies[defaultProxyName](request, this.env, ctx);
+    }
+
+    // enableInternet fallback
+    if (enableInternet) {
+      return fetch(request);
+    }
+
+    return new Response('Origin is disallowed', { status: 520 });
+  }
+}
+
 // ===============================
 // ===============================
 //     MAIN CONTAINER CLASS
 // ===============================
 // ===============================
+//
+
+export type OutboundHandlerContext = {
+  containerId: string;
+};
 
 export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
+  static get outboundHandlers(): Record<string, OutboundHandler> | undefined {
+    return outboundHandlerRegistry.get(this.name);
+  }
+
+  static set outboundHandlers(handlers: Record<string, OutboundHandler>) {
+    outboundHandlerRegistry.set(this.name, handlers);
+  }
+
+  static get outboundProxies(): Record<string, OutboundHandler> | undefined {
+    return outboundProxiesRegistry.get(this.name);
+  }
+
+  static set outboundProxies(proxies: Record<string, OutboundHandler>) {
+    const existing = outboundProxiesRegistry.get(this.name) ?? {};
+    outboundProxiesRegistry.set(this.name, { ...existing, ...proxies });
+  }
+
+  static get outboundProxy(): OutboundHandler | undefined {
+    const proxyName = defaultProxyNameRegistry.get(this.name);
+    if (!proxyName) return undefined;
+    return outboundProxiesRegistry.get(this.name)?.[proxyName];
+  }
+
+  static set outboundProxy(handler: OutboundHandler) {
+    const key = '__outboundProxy__';
+    const existing = outboundProxiesRegistry.get(this.name) ?? {};
+    outboundProxiesRegistry.set(this.name, { ...existing, [key]: handler });
+    defaultProxyNameRegistry.set(this.name, key);
+  }
+
   // =========================
   //     Public Attributes
   // =========================
@@ -230,6 +330,9 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   // but it's still useful if you want to control the path that
   // the Container class uses to send HTTP requests to.
   pingEndpoint: string = 'ping';
+  applyOutboundInterceptionPromise: Promise<void> = Promise.resolve();
+
+  usingInterception = false;
 
   // =========================
   //     PUBLIC INTERFACE
@@ -254,6 +357,15 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     });
 
     this.container = ctx.container;
+    const ctor = this.constructor as typeof Container;
+    if (
+      ctor.outboundHandlers !== undefined ||
+      ctor.outboundProxy !== undefined ||
+      ctor.outboundProxies !== undefined
+    ) {
+      this.usingInterception = true;
+      this.applyOutboundInterceptionPromise = this.applyOutboundInterception();
+    }
 
     // Apply options if provided
     if (options) {
@@ -286,6 +398,64 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    */
   async getState(): Promise<State> {
     return { ...(await this.state.getState()) };
+  }
+
+  // ====================================
+  //     OUTBOUND INTERCEPTION CONFIG
+  // ====================================
+
+  /**
+   * Set the catch-all outbound proxy to a named method from `outboundProxies`.
+   * Overrides the default `outboundProxy` at runtime via ContainerProxy props.
+   *
+   * @param methodName - Name of a method defined in `static outboundProxies`
+   * @throws Error if the method name is not found in `outboundProxies`
+   */
+  async setOutboundProxy(methodName: string): Promise<void> {
+    this.validateProxyMethodName(methodName);
+    this.proxyOverride = methodName;
+    await this.applyOutboundInterception();
+  }
+
+  /**
+   * Add or override a hostname-specific outbound handler at runtime,
+   * referencing a named method from `outboundProxies`.
+   * Overrides any matching entry in `static outboundHandlers` for this hostname.
+   *
+   * @param hostname - The hostname or ip:port to intercept (e.g. `'google.com'`)
+   * @param methodName - Name of a method defined in `static outboundProxies`
+   * @throws Error if the method name is not found in `outboundProxies`
+   */
+  async addOutboundHandle(hostname: string, methodName: string): Promise<void> {
+    this.validateProxyMethodName(methodName);
+    this.handlerOverrides[hostname] = methodName;
+    await this.applyOutboundInterception();
+  }
+
+  /**
+   * Remove a runtime hostname override added via `addOutboundHandle`.
+   * The default handler from `static outboundHandlers` (if any) will be used again.
+   *
+   * @param hostname - The hostname or ip:port to stop overriding
+   */
+  async removeOutboundHandle(hostname: string): Promise<void> {
+    delete this.handlerOverrides[hostname];
+    await this.applyOutboundInterception();
+  }
+
+  /**
+   * Replace all runtime hostname overrides at once.
+   * Each value must be a method name from `static outboundProxies`.
+   *
+   * @param handlers - Record mapping hostnames to method names in `outboundProxies`
+   * @throws Error if any method name is not found in `outboundProxies`
+   */
+  async setOutboundHandlers(handlers: Record<string, string>): Promise<void> {
+    for (const methodName of Object.values(handlers)) {
+      this.validateProxyMethodName(methodName);
+    }
+    this.handlerOverrides = { ...handlers };
+    await this.applyOutboundInterception();
   }
 
   // ==========================
@@ -782,9 +952,45 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
 
   private sleepAfterMs = 0;
 
+  // Outbound interception runtime overrides (passed through ContainerProxy props)
+  private handlerOverrides: Record<string, string> = {};
+  private proxyOverride?: string;
+
   // ==========================
   //     GENERAL HELPERS
   // ==========================
+
+  /**
+   * Validates that a method name exists in the outboundProxies registry for this class.
+   * @throws Error if the method name is not found
+   */
+  private validateProxyMethodName(methodName: string): void {
+    const proxies = outboundProxiesRegistry.get(this.constructor.name);
+    if (!proxies || !(methodName in proxies)) {
+      throw new Error(
+        `Outbound proxy method '${methodName}' not found in outboundProxies for ${this.constructor.name}`
+      );
+    }
+  }
+
+  /**
+   * Applies (or re-applies) outbound HTTP interception with the current
+   * default registries + runtime overrides passed through ContainerProxy props.
+   */
+  private async applyOutboundInterception(): Promise<void> {
+    await this.container.interceptAllOutboundHttp(
+      this.ctx.exports.ContainerProxy({
+        props: {
+          enableInternet: this.enableInternet,
+          containerId: this.ctx.id.toString(),
+          className: this.constructor.name,
+          handlerOverrides:
+            Object.keys(this.handlerOverrides).length > 0 ? this.handlerOverrides : undefined,
+          proxyOverride: this.proxyOverride,
+        },
+      })
+    );
+  }
 
   /**
    * Execute SQL queries against the Container's database
@@ -898,6 +1104,8 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       const envVars = options?.envVars ?? this.envVars;
       const entrypoint = options?.entrypoint ?? this.entrypoint;
       const enableInternet = options?.enableInternet ?? this.enableInternet;
+      // TODO: hopefully, enableInternet can be false in a future where we enable DNS
+      // and TLS paths.
 
       // Only include properties that are defined
       const startConfig: ContainerStartOptions = {
@@ -937,6 +1145,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       await this.scheduleNextAlarm();
 
       if (!this.container.running) {
+        await this.applyOutboundInterceptionPromise;
         this.container.start(startConfig);
         this.monitor = this.container.monitor();
       } else {
