@@ -11,7 +11,7 @@ jest.mock('node:async_hooks', () => {
       getStore() {
         return null;
       }
-      run(store: any, fn: Function) {
+      run(store, fn) {
         return fn();
       }
     },
@@ -78,10 +78,9 @@ describe('Container', () => {
 
     // Create a container instance with the mock context
     // @ts-ignore - ignore TypeScript errors for testing
+    // pass our mock context into constructor; DurableObject ctor will keep ref
     container = new Container(mockCtx, {});
-    // Add ctx property for testing
-    (container as any).ctx = mockCtx;
-    // Add defaultPort for testing
+    // defaultPort for testing
     container.defaultPort = 8080;
   });
 
@@ -302,6 +301,7 @@ describe('Container', () => {
 describe('getRandom', () => {
   test('should return a container stub', async () => {
     const mockBinding = {
+      idFromName: jest.fn().mockReturnValue('mock-id'),
       idFromString: jest.fn().mockReturnValue('mock-id'),
       get: jest.fn().mockReturnValue({ mockStub: true }),
     };
