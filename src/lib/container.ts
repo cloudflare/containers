@@ -182,14 +182,14 @@ class ContainerState {
   async getState(): Promise<State> {
     if (!this.status) {
       const state = await this.storage.get<State>(CONTAINER_STATE_KEY);
-      if (!state) {
+      if (state) {
+        this.status = state;
+      } else {
         this.status = {
           status: 'stopped',
           lastChange: Date.now(),
         };
         await this.update();
-      } else {
-        this.status = state;
       }
     }
 
@@ -615,12 +615,12 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
 
     // Ensure the callback is a string (method name)
     if (typeof callback !== 'string') {
-      throw new Error('Callback must be a string (method name)');
+      throw new TypeError('Callback must be a string (method name)');
     }
 
     // Ensure the method exists
     if (typeof this[callback as keyof this] !== 'function') {
-      throw new Error(`this.${callback} is not a function`);
+      throw new TypeError(`this.${callback} is not a function`);
     }
 
     // Schedule based on the type of 'when' parameter
@@ -1031,15 +1031,18 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       .catch(async (error: unknown) => {
         if (isNoInstanceError(error) || isTransientContainerStartupError(error)) {
           // Transient local-dev errors can happen before the monitor discovers the instance.
-          // Reset monitor so the next start attempt can re-attach.
-          this.monitor = undefined;
+          // Reset monitorSetup *immediately* so a retry attempt won't bail out early
+          // due to the guard at the top of `setupMonitorCallbacks`.
           this.monitorSetup = false;
+          // Also clear the reference to the stale monitor promise.
+          this.monitor = undefined;
           return;
         }
 
         const exitCode = getExitCodeFromError(error);
         if (exitCode !== null) {
           await this.state.setStoppedWithCode(exitCode);
+          // clear the setup flag before returning so subsequent calls succeed
           this.monitorSetup = false;
           this.monitor = undefined;
           return;
