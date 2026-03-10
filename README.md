@@ -5,6 +5,7 @@ A class for interacting with Containers on Cloudflare Workers.
 ## Features
 
 - HTTP request proxying and WebSocket forwarding
+- Outbound request interception by host or catch-all handler
 - Simple container lifecycle management (starting and stopping containers)
 - Event hooks for container lifecycle events (onStart, onStop, onError)
 - Configurable sleep timeout that renews on requests
@@ -110,7 +111,6 @@ See [this example](#http-example-with-lifecycle-hooks).
 - `onStart()`
 
   Called when container starts successfully.
-
   - called when states transition from `stopped` -> `running`, `running` -> `healthy`
 
 - `onStop()`
@@ -150,7 +150,6 @@ See [this example](#http-example-with-lifecycle-hooks).
   Note: `containerFetch` does not work with websockets.
 
   Sends an HTTP request to the container. Supports both standard fetch API signatures:
-
   - `containerFetch(request, port?)`: Traditional signature with Request object
   - `containerFetch(url, init?, port?)`: Standard fetch-like signature with URL string/object and RequestInit options
 
@@ -188,7 +187,6 @@ See [this example](#http-example-with-lifecycle-hooks).
   Starts the container, without waiting for any ports to be ready.
 
   You might want to use this instead of `startAndWaitForPorts` if you want to:
-
   - Start a container without blocking until a port is available
   - Initialize a container that doesn't expose ports
   - Perform custom port availability checks separately
@@ -249,10 +247,52 @@ See [this example](#http-example-with-lifecycle-hooks).
 
   Manually renews the container activity timeout (extends container lifetime).
 
+##### Outbound Interception
+
+Use outbound interception when you want to control what the container can reach, or proxy outbound requests through Worker code.
+
+- `setOutboundByHost(host: string, method: string): Promise<void>`
+
+  Routes a specific hostname to a named handler from `static outboundHandlers`.
+
+- `setOutboundByHosts(handlers: Record<string, string>): Promise<void>`
+
+  Replaces all runtime host-specific overrides at once.
+
+- `removeOutboundByHost(host: string): Promise<void>`
+
+  Removes a runtime host-specific override.
+
+- `setOutboundHandler(method: string): Promise<void>`
+
+  Sets the catch-all outbound handler to a named handler from `static outboundHandlers`.
+
+To configure interception on the class itself:
+
+- `static outbound = (req, env, ctx) => Response`
+
+  Catch-all handler for outbound requests.
+
+- `static outboundByHost = { [host]: handler }`
+
+  Per-host handlers for exact hostname matches such as `google.com` or an IP address.
+
+- `static outboundHandlers = { [name]: handler }`
+
+  Named handlers that can be selected at runtime with `setOutboundHandler` and `setOutboundByHost`.
+
+Matching order is:
+
+1. Runtime `setOutboundByHost` override
+2. Static `outboundByHost`
+3. Runtime `setOutboundHandler` catch-all
+4. Static `outbound`
+
+If nothing matches, the request goes out normally when `enableInternet` is `true`, and is blocked when `enableInternet` is `false`.
+
 - `schedule<T = string>(when: Date | number, callback: string, payload?: T): Promise<Schedule<T>>`
 
   Options:
-
   - `when`: When to execute the task (Date object or number of seconds delay)
   - `callback`: Name of the function to call as a string
   - `payload`: Data to pass to the callback
@@ -370,6 +410,45 @@ export class ConfiguredContainer extends Container {
 ```
 
 You can also set these on a per-instance basis with `start` or `startAndWaitForPorts`
+
+### Outbound Interception
+
+This lets you intercept requests the container makes to the outside world.
+
+```typescript
+import { Container, OutboundHandlerContext } from '@cloudflare/containers';
+
+export class MyContainer extends Container {
+  defaultPort = 8080;
+  enableInternet = false;
+
+  static outboundByHost = {
+    'google.com': (_req: Request, _env: unknown, ctx: OutboundHandlerContext) => {
+      return new Response('hi ' + ctx.containerId + ' i am google');
+    },
+  };
+
+  static outboundHandlers = {
+    async github(_req: Request, _env: unknown, _ctx: OutboundHandlerContext) {
+      return new Response('i am github');
+    },
+  };
+
+  static outbound = (req: Request) => {
+    return new Response(`Hi ${req.url}, I can't handle you`);
+  };
+
+  async routeGithubThroughHandler(): Promise<void> {
+    await this.setOutboundByHost('github.com', 'github');
+  }
+
+  async makeEverythingUseGithubHandler(): Promise<void> {
+    await this.setOutboundHandler('github');
+  }
+}
+```
+
+Use `outboundByHost` for fixed host rules, `outbound` for a default catch-all, and `outboundHandlers` for reusable named handlers you want to switch on at runtime.
 
 ### Multiple Ports and Custom Routing
 

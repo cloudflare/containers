@@ -55,14 +55,14 @@ export type OutboundHandler<E = Cloudflare.Env> = (
   ctx: OutboundHandlerContext
 ) => Promise<Response> | Response;
 
-// class name to named proxy methods (includes the default outboundProxy)
-const outboundProxiesRegistry = new Map<string, Record<string, OutboundHandler>>();
+// class name to named outbound handlers (includes the default outbound handler)
+const outboundHandlersRegistry = new Map<string, Record<string, OutboundHandler>>();
 
-// class name to default catch-all proxy method name in outboundProxiesRegistry
-const defaultProxyNameRegistry = new Map<string, string>();
+// class name to default catch-all outbound handler method name in outboundHandlersRegistry
+const defaultOutboundHandlerNameRegistry = new Map<string, string>();
 
-// class name to hostname to default handler function
-const outboundHandlerRegistry = new Map<string, Record<string, OutboundHandler>>();
+// class name to hostname to default outbound handler function
+const outboundByHostRegistry = new Map<string, Record<string, OutboundHandler>>();
 
 export type Signal = 'SIGKILL' | 'SIGINT' | 'SIGTERM';
 export type SignalInteger = number;
@@ -213,41 +213,44 @@ type ContainerProxyOptions = {
   enableInternet?: boolean;
   containerId: string;
   className: string;
-  handlerOverrides?: Record<string, string>;
-  proxyOverride?: string;
+  outboundByHostOverrides?: Record<string, string>;
+  outboundHandlerOverride?: string;
 };
 
 export class ContainerProxy extends WorkerEntrypoint<Cloudflare.Env, ContainerProxyOptions> {
-  static register() {}
-
   override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    const { className, containerId, handlerOverrides, proxyOverride, enableInternet } =
-      this.ctx.props;
-    const proxies = outboundProxiesRegistry.get(className);
+    const {
+      className,
+      containerId,
+      outboundByHostOverrides,
+      outboundHandlerOverride,
+      enableInternet,
+    } = this.ctx.props;
+    const handlers = outboundHandlersRegistry.get(className);
     const ctx: OutboundHandlerContext = { containerId };
 
-    // Runtime handler override takes priority over static outboundHandlers
-    const overrideMethodName = handlerOverrides?.[url.hostname];
-    if (overrideMethodName && proxies?.[overrideMethodName]) {
-      return proxies[overrideMethodName](request, this.env, ctx);
+    // Runtime handler override takes priority over static outboundByHost
+    const overrideMethodName = outboundByHostOverrides?.[url.hostname];
+    if (overrideMethodName && handlers?.[overrideMethodName]) {
+      return handlers[overrideMethodName](request, this.env, ctx);
     }
 
-    // Static outboundHandlers
-    const handlers = outboundHandlerRegistry.get(className);
-    if (handlers && url.hostname in handlers) {
-      return handlers[url.hostname](request, this.env, ctx);
+    // Static outboundByHost
+    const handlersByHost = outboundByHostRegistry.get(className);
+    if (handlersByHost && url.hostname in handlersByHost) {
+      return handlersByHost[url.hostname](request, this.env, ctx);
     }
 
-    // Runtime catch-all proxy override
-    if (proxyOverride && proxies?.[proxyOverride]) {
-      return proxies[proxyOverride](request, this.env, ctx);
+    // Runtime catch-all handler override
+    if (outboundHandlerOverride && handlers?.[outboundHandlerOverride]) {
+      return handlers[outboundHandlerOverride](request, this.env, ctx);
     }
 
-    // Default catch-all proxy (static outboundProxy)
-    const defaultProxyName = defaultProxyNameRegistry.get(className);
-    if (defaultProxyName && proxies?.[defaultProxyName]) {
-      return proxies[defaultProxyName](request, this.env, ctx);
+    // Default catch-all handler (static outbound)
+    const defaultOutboundHandlerName = defaultOutboundHandlerNameRegistry.get(className);
+    if (defaultOutboundHandlerName && handlers?.[defaultOutboundHandlerName]) {
+      return handlers[defaultOutboundHandlerName](request, this.env, ctx);
     }
 
     // enableInternet fallback
@@ -271,34 +274,50 @@ export type OutboundHandlerContext = {
 };
 
 export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
+  static get outboundByHost(): Record<string, OutboundHandler> | undefined {
+    return outboundByHostRegistry.get(this.name);
+  }
+
+  static set outboundByHost(handlers: Record<string, OutboundHandler>) {
+    outboundByHostRegistry.set(this.name, handlers);
+  }
+
   static get outboundHandlers(): Record<string, OutboundHandler> | undefined {
-    return outboundHandlerRegistry.get(this.name);
+    return outboundHandlersRegistry.get(this.name);
   }
 
   static set outboundHandlers(handlers: Record<string, OutboundHandler>) {
-    outboundHandlerRegistry.set(this.name, handlers);
+    const existing = outboundHandlersRegistry.get(this.name) ?? {};
+    outboundHandlersRegistry.set(this.name, { ...existing, ...handlers });
+  }
+
+  static get outbound(): OutboundHandler | undefined {
+    const handlerName = defaultOutboundHandlerNameRegistry.get(this.name);
+    if (!handlerName) return undefined;
+    return outboundHandlersRegistry.get(this.name)?.[handlerName];
+  }
+
+  static set outbound(handler: OutboundHandler) {
+    const key = '__outbound__';
+    const existing = outboundHandlersRegistry.get(this.name) ?? {};
+    outboundHandlersRegistry.set(this.name, { ...existing, [key]: handler });
+    defaultOutboundHandlerNameRegistry.set(this.name, key);
   }
 
   static get outboundProxies(): Record<string, OutboundHandler> | undefined {
-    return outboundProxiesRegistry.get(this.name);
+    return this.outboundHandlers;
   }
 
-  static set outboundProxies(proxies: Record<string, OutboundHandler>) {
-    const existing = outboundProxiesRegistry.get(this.name) ?? {};
-    outboundProxiesRegistry.set(this.name, { ...existing, ...proxies });
+  static set outboundProxies(handlers: Record<string, OutboundHandler>) {
+    this.outboundHandlers = handlers;
   }
 
   static get outboundProxy(): OutboundHandler | undefined {
-    const proxyName = defaultProxyNameRegistry.get(this.name);
-    if (!proxyName) return undefined;
-    return outboundProxiesRegistry.get(this.name)?.[proxyName];
+    return this.outbound;
   }
 
   static set outboundProxy(handler: OutboundHandler) {
-    const key = '__outboundProxy__';
-    const existing = outboundProxiesRegistry.get(this.name) ?? {};
-    outboundProxiesRegistry.set(this.name, { ...existing, [key]: handler });
-    defaultProxyNameRegistry.set(this.name, key);
+    this.outbound = handler;
   }
 
   // =========================
@@ -359,9 +378,9 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     this.container = ctx.container;
     const ctor = this.constructor as typeof Container;
     if (
-      ctor.outboundHandlers !== undefined ||
-      ctor.outboundProxy !== undefined ||
-      ctor.outboundProxies !== undefined
+      ctor.outboundByHost !== undefined ||
+      ctor.outbound !== undefined ||
+      ctor.outboundHandlers !== undefined
     ) {
       this.usingInterception = true;
       this.applyOutboundInterceptionPromise = this.applyOutboundInterception();
@@ -405,56 +424,57 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   // ====================================
 
   /**
-   * Set the catch-all outbound proxy to a named method from `outboundProxies`.
-   * Overrides the default `outboundProxy` at runtime via ContainerProxy props.
+   * Set the catch-all outbound handler to a named method from `outboundHandlers`.
+   * Overrides the default `outbound` at runtime via ContainerProxy props.
    *
-   * @param methodName - Name of a method defined in `static outboundProxies`
-   * @throws Error if the method name is not found in `outboundProxies`
+   * @param methodName - Name of a method defined in `static outboundHandlers`
+   * @throws Error if the method name is not found in `outboundHandlers`
    */
-  async setOutboundProxy(methodName: string): Promise<void> {
-    this.validateProxyMethodName(methodName);
-    this.proxyOverride = methodName;
+  async setOutboundHandler(methodName: string): Promise<void> {
+    this.validateOutboundHandlerMethodName(methodName);
+    this.outboundHandlerOverride = methodName;
     await this.applyOutboundInterception();
   }
 
   /**
    * Add or override a hostname-specific outbound handler at runtime,
-   * referencing a named method from `outboundProxies`.
-   * Overrides any matching entry in `static outboundHandlers` for this hostname.
+   * referencing a named method from `outboundHandlers`.
+   * Overrides any matching entry in `static outboundByHost` for this hostname.
    *
    * @param hostname - The hostname or ip:port to intercept (e.g. `'google.com'`)
-   * @param methodName - Name of a method defined in `static outboundProxies`
-   * @throws Error if the method name is not found in `outboundProxies`
+   * @param methodName - Name of a method defined in `static outboundHandlers`
+   * @throws Error if the method name is not found in `outboundHandlers`
    */
-  async addOutboundHandle(hostname: string, methodName: string): Promise<void> {
-    this.validateProxyMethodName(methodName);
-    this.handlerOverrides[hostname] = methodName;
+  async setOutboundByHost(hostname: string, methodName: string): Promise<void> {
+    this.validateOutboundHandlerMethodName(methodName);
+    this.outboundByHostOverrides[hostname] = methodName;
     await this.applyOutboundInterception();
   }
 
   /**
-   * Remove a runtime hostname override added via `addOutboundHandle`.
-   * The default handler from `static outboundHandlers` (if any) will be used again.
+   * Remove a runtime hostname override added via `setOutboundByHost`.
+   * The default handler from `static outboundByHost` (if any) will be used again.
    *
    * @param hostname - The hostname or ip:port to stop overriding
    */
-  async removeOutboundHandle(hostname: string): Promise<void> {
-    delete this.handlerOverrides[hostname];
+  async removeOutboundByHost(hostname: string): Promise<void> {
+    delete this.outboundByHostOverrides[hostname];
     await this.applyOutboundInterception();
   }
 
   /**
    * Replace all runtime hostname overrides at once.
-   * Each value must be a method name from `static outboundProxies`.
+   * Each value must be a method name from `static outboundHandlers`.
    *
-   * @param handlers - Record mapping hostnames to method names in `outboundProxies`
-   * @throws Error if any method name is not found in `outboundProxies`
+   * @param handlers - Record mapping hostnames to method names in `outboundHandlers`
+   * @throws Error if any method name is not found in `outboundHandlers`
    */
-  async setOutboundHandlers(handlers: Record<string, string>): Promise<void> {
+  async setOutboundByHosts(handlers: Record<string, string>): Promise<void> {
     for (const methodName of Object.values(handlers)) {
-      this.validateProxyMethodName(methodName);
+      this.validateOutboundHandlerMethodName(methodName);
     }
-    this.handlerOverrides = { ...handlers };
+
+    this.outboundByHostOverrides = { ...handlers };
     await this.applyOutboundInterception();
   }
 
@@ -953,22 +973,22 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   private sleepAfterMs = 0;
 
   // Outbound interception runtime overrides (passed through ContainerProxy props)
-  private handlerOverrides: Record<string, string> = {};
-  private proxyOverride?: string;
+  private outboundByHostOverrides: Record<string, string> = {};
+  private outboundHandlerOverride?: string;
 
   // ==========================
   //     GENERAL HELPERS
   // ==========================
 
   /**
-   * Validates that a method name exists in the outboundProxies registry for this class.
+   * Validates that a method name exists in the outboundHandlers registry for this class.
    * @throws Error if the method name is not found
    */
-  private validateProxyMethodName(methodName: string): void {
-    const proxies = outboundProxiesRegistry.get(this.constructor.name);
-    if (!proxies || !(methodName in proxies)) {
+  private validateOutboundHandlerMethodName(methodName: string): void {
+    const handlers = outboundHandlersRegistry.get(this.constructor.name);
+    if (!handlers || !(methodName in handlers)) {
       throw new Error(
-        `Outbound proxy method '${methodName}' not found in outboundProxies for ${this.constructor.name}`
+        `Outbound handler method '${methodName}' not found in outboundHandlers for ${this.constructor.name}`
       );
     }
   }
@@ -984,9 +1004,11 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
           enableInternet: this.enableInternet,
           containerId: this.ctx.id.toString(),
           className: this.constructor.name,
-          handlerOverrides:
-            Object.keys(this.handlerOverrides).length > 0 ? this.handlerOverrides : undefined,
-          proxyOverride: this.proxyOverride,
+          outboundByHostOverrides:
+            Object.keys(this.outboundByHostOverrides).length > 0
+              ? this.outboundByHostOverrides
+              : undefined,
+          outboundHandlerOverride: this.outboundHandlerOverride,
         },
       })
     );

@@ -24,8 +24,6 @@ func handler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		fmt.Println("Let's go.", res.StatusCode)
-
 		w.WriteHeader(res.StatusCode)
 		body, err := io.ReadAll(res.Body)
 		if err != nil {

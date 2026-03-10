@@ -11,11 +11,8 @@
     {
       "class_name": "MyContainer",
       "image": "./Dockerfile",
-      "max_instances": 0,
+      "max_instances": 3,
       "name": "container-package-class-tier-3",
-      "constraints": {
-        "tiers": [3],
-      },
     },
   ],
   "durable_objects": {
