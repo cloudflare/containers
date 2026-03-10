@@ -19,8 +19,8 @@ export class MyContainer extends Container {
   };
 
   static outboundHandlers = {
-    async github() {
-      return new Response('I am github');
+    async github(_req: Request, _env: unknown, ctx: OutboundHandlerContext<{ hello: string }>) {
+      return new Response('I am github, ' + ctx.params?.hello);
     },
   };
 
@@ -38,14 +38,10 @@ export default {
       return new Response('?proxy= param should be set to point to a domain');
     }
 
-    try {
-      // getContainer will return a specific instance if no second argument is provided
-      const container = getContainer(env.MY_CONTAINER);
+    // getContainer will return a specific instance if no second argument is provided
+    const container = getContainer(env.MY_CONTAINER, 'hello');
 
-      await container.setOutboundByHost('github.com', 'github');
-      return await container.fetch(request);
-    } catch (err) {
-      return new Response('error: ' + err.message, { status: 400 });
-    }
+    await container.setOutboundByHost('github.com', 'github', { hello: 'world' });
+    return await container.fetch(request);
   },
 };

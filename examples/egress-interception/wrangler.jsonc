@@ -3,7 +3,7 @@
   "name": "container-package-class-tier-3",
   "main": "src/index.ts",
   "compatibility_date": "2026-02-06",
-  "compatibility_flags": ["nodejs_compat", "experimental"],
+  "compatibility_flags": ["nodejs_compat"],
   "observability": {
     "enabled": true,
   },
