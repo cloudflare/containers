@@ -1,5 +1,11 @@
 # @cloudflare/containers
 
+## 0.2.0
+
+### Minor Changes
+
+- Add support to specify outbound hooks in container class (experimental)
+
 ## 0.1.1
 
 ### Patch Changes
