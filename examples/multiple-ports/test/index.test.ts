@@ -25,9 +25,10 @@ describe('multiple ports functionality', () => {
       'Hello from test container server one! process.env.MESSAGE: start with startAndWaitForPorts'
     );
 
-    // Second server listening on 8081 should not be ready yet - this call should not resolve within 1s
+    // Second server listening on 8081 should not be ready yet - this call should error
+    // fast as the user did not configure their container class with 8081 and we didn't wait for ports
     fetchPromise = fetch(`${url}/server-two?id=${id}`);
-    expect(fetchOrTimeout(fetchPromise, 1000)).rejects.toThrow('timeout');
+    expect(await (await fetchPromise).text()).toContain('Container is not listening to port 8081');
 
     // Wait for the default port (8080) to be ready
 

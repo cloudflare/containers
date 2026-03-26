@@ -1,5 +1,5 @@
 import { Container } from '../../../src/lib/container';
-import { getContainer, getRandom, switchPort } from '../../../src/lib/utils';
+import { getContainer } from '../../../src/lib/utils';
 
 /**
  * Test Container implementation for integration testing

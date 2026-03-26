@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "container-package-class-tier-3",
+  "name": "egress-workers",
   "main": "src/index.ts",
   "compatibility_date": "2026-02-06",
   "compatibility_flags": ["nodejs_compat"],
@@ -12,7 +12,7 @@
       "class_name": "MyContainer",
       "image": "./Dockerfile",
       "max_instances": 3,
-      "name": "container-package-class-tier-3",
+      "name": "egress-workers"
     },
   ],
   "durable_objects": {
