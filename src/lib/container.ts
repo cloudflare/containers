@@ -768,7 +768,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
 
         // Wait a bit before trying again
         await Promise.any([
-          new Promise(resolve => setTimeout(resolve, waitOptions.waitInterval)),
+          new Promise(resolve => setTimeout(resolve, pollInterval)),
           abortedSignal,
         ]);
         if (waitOptions.signal?.aborted) {
@@ -790,6 +790,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     if (this.container.running) {
       this.container.signal(typeof signal === 'string' ? signalToNumbers[signal] : signal);
     }
+
     await this.syncPendingStoppedEvents();
   }
 
@@ -826,6 +827,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    * By default, this method calls `this.stop()`
    */
   public async onActivityExpired(): Promise<void> {
+    console.log('Activity expired, signalling container to stop');
     if (!this.container.running) {
       return;
     }
@@ -852,6 +854,18 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   public renewActivityTimeout() {
     const timeoutInMs = parseTimeExpression(this.sleepAfter) * 1000;
     this.sleepAfterMs = Date.now() + timeoutInMs;
+  }
+
+  /**
+   * Decrement the inflight request counter.
+   * When the counter transitions to 0, renew the activity timeout so the
+   * inactivity window starts fresh from the moment the last request completes.
+   */
+  private decrementInflight() {
+    this.inflightRequests = Math.max(0, this.inflightRequests - 1);
+    if (this.inflightRequests === 0) {
+      this.renewActivityTimeout();
+    }
   }
 
   // ==================
@@ -987,12 +1001,96 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     // Create URL for the container request
     const containerUrl = request.url.replace('https:', 'http:');
 
+    this.inflightRequests++;
+
     try {
       // Renew the activity timeout whenever a request is proxied
       this.renewActivityTimeout();
       const res = await tcpPort.fetch(containerUrl, request);
+
+      if (res.webSocket !== null) {
+        // WebSocket response: proxy by accepting both sides and forwarding messages
+        const containerWs = res.webSocket;
+        const [client, server] = Object.values(new WebSocketPair()) as [WebSocket, WebSocket];
+
+        // Guard to ensure we only decrement inflight once per WebSocket,
+        // since both close and error events can fire.
+        let settled = false;
+        const settleInflight = () => {
+          if (!settled) {
+            settled = true;
+            this.decrementInflight();
+          }
+        };
+
+        // Accept both WebSocket ends
+        containerWs.accept();
+        server.accept();
+
+        // Forward messages from client to container
+        server.addEventListener('message', (event: MessageEvent) => {
+          this.renewActivityTimeout();
+          try {
+            containerWs.send(event.data);
+          } catch {
+            server.close(1011, 'Failed to forward message to container');
+          }
+        });
+
+        // Forward messages from container to client
+        containerWs.addEventListener('message', (event: MessageEvent) => {
+          this.renewActivityTimeout();
+          try {
+            server.send(event.data);
+          } catch {
+            containerWs.close(1011, 'Failed to forward message to client');
+          }
+        });
+
+        // Forward close from client to container
+        server.addEventListener('close', (event: CloseEvent) => {
+          settleInflight();
+          // Codes 1005 (No Status Received) and 1006 (Abnormal Closure) are
+          // reserved and cannot be sent in a close frame — fall back to 1000.
+          const code = event.code === 1005 || event.code === 1006 ? 1000 : event.code;
+          containerWs.close(code, event.reason);
+        });
+
+        // Forward close from container to client
+        containerWs.addEventListener('close', (event: CloseEvent) => {
+          settleInflight();
+          const code = event.code === 1005 || event.code === 1006 ? 1000 : event.code;
+          server.close(code, event.reason);
+        });
+
+        // Forward errors
+        server.addEventListener('error', () => {
+          settleInflight();
+          containerWs.close(1011, 'Client WebSocket error');
+        });
+
+        containerWs.addEventListener('error', () => {
+          settleInflight();
+          server.close(1011, 'Container WebSocket error');
+        });
+
+        return new Response(null, { status: 101, webSocket: client });
+      }
+
+      if (res.body !== undefined) {
+        let { readable, writable } = new TransformStream();
+        res.body?.pipeTo(writable).finally(() => {
+          this.decrementInflight();
+        });
+
+        return new Response(readable, res);
+      }
+
+      this.decrementInflight();
       return res;
     } catch (e) {
+      this.decrementInflight();
+
       if (!(e instanceof Error)) {
         throw e;
       }
@@ -1057,6 +1155,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   private monitorSetup = false;
 
   private sleepAfterMs = 0;
+  private inflightRequests = 0;
 
   // Outbound interception runtime overrides (passed through ContainerProxy props)
   private outboundByHostOverrides: OutboundByHostOverrides = {};
@@ -1674,6 +1773,9 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   }
 
   private isActivityExpired(): boolean {
+    if (this.inflightRequests > 0) {
+      return false;
+    }
     return this.sleepAfterMs <= Date.now();
   }
 }
