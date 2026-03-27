@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -18,6 +19,31 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Hi, I'm a container and this is my message: %s, and my deployment ID is: %s", message, deploymentId)
 }
 
+// Makes an outbound request to the origin specified in the ?origin= query param.
+// Traffic is intercepted by the outbound Worker defined in the DO class.
+func egressHandler(w http.ResponseWriter, r *http.Request) {
+	origin := r.URL.Query().Get("origin")
+	if origin == "" {
+		http.Error(w, "missing ?origin= query parameter", http.StatusBadRequest)
+		return
+	}
+
+	resp, err := http.Get(origin)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("egress request failed: %v", err), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	for k, vals := range resp.Header {
+		for _, v := range vals {
+			w.Header().Add(k, v)
+		}
+	}
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
+}
+
 func errorHandler(w http.ResponseWriter, r *http.Request) {
 	// panics
 	panic("This is a panic")
@@ -31,6 +57,7 @@ func main() {
 	router := http.NewServeMux()
 	router.HandleFunc("/", handler)
 	router.HandleFunc("/container", handler)
+	router.HandleFunc("/egress", egressHandler)
 	router.HandleFunc("/error", errorHandler)
 
 	server := &http.Server{
