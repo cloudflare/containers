@@ -1,5 +1,11 @@
 # @cloudflare/containers
 
+## 0.2.1
+
+### Patch Changes
+
+- 828e8c8: Start tracking activity by piping the response body to a transform stream and proxying the websocket
+
 ## 0.2.0
 
 ### Minor Changes
