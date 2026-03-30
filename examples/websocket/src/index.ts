@@ -8,11 +8,15 @@ import { getContainer } from '../../../src/lib/utils';
 export class WebSocketTestContainer extends Container {
   defaultPort = 8080;
   // Set how long the container should stay active without requests
-  sleepAfter = '3m';
+  sleepAfter = '10s';
   envVars = {
     MESSAGE: 'websocket default message',
   };
   entrypoint = ['node', 'server.js'];
+
+  onStop() {
+    console.log('stopped!');
+  }
 }
 
 export default {
@@ -25,6 +29,33 @@ export default {
     // get a container instance based on id query param or use singleton
     const id = url.searchParams.get('id') || 'singleton';
     const container = getContainer(env.CONTAINER, id);
+
+    if (url.pathname === '/ws') {
+      // Create a WebSocket upgrade request to the container
+      const wsRequest = new Request('http://container/ws', {
+        headers: { Upgrade: 'websocket' },
+      });
+      const response = await container.fetch(wsRequest);
+      const containerWs = response.webSocket;
+      if (!containerWs) {
+        return new Response('Failed to establish WebSocket with container', { status: 500 });
+      }
+      containerWs.accept();
+
+      // Send ping to the container
+      containerWs.send('ping');
+
+      // Wait for the pong response
+      const pong = await new Promise<string>(resolve => {
+        containerWs.addEventListener('message', (event: MessageEvent) => {
+          resolve(event.data as string);
+        });
+      });
+
+      containerWs.close();
+
+      return new Response(pong);
+    }
 
     if (url.pathname === '/fetch/ws') {
       console.log('Handling WebSocket fetch request');

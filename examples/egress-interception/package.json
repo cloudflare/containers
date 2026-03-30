@@ -1,5 +1,5 @@
 {
-  "name": "example",
+  "name": "egress-interception",
   "version": "0.0.1",
   "private": true,
   "scripts": {
@@ -9,7 +9,7 @@
     "cf-typegen": "wrangler types"
   },
   "devDependencies": {
-    "wrangler": "4.74.0",
+    "wrangler": "4.77.0",
     "@cloudflare/workers-types": "^4.20250506.0",
     "typescript": "^5.5.2"
   },
