@@ -1774,8 +1774,10 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
 
   private isActivityExpired(): boolean {
     if (this.inflightRequests > 0) {
+      this.renewActivityTimeout();
       return false;
     }
+
     return this.sleepAfterMs <= Date.now();
   }
 }
