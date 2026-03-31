@@ -1,5 +1,11 @@
 # @cloudflare/containers
 
+## 0.2.2
+
+### Patch Changes
+
+- c88e29f: Activity tracking refreshes timeout if inflight request instead of depending on alarm polling
+
 ## 0.2.1
 
 ### Patch Changes
