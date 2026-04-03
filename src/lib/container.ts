@@ -326,7 +326,14 @@ export class ContainerProxy extends WorkerEntrypoint<Cloudflare.Env, ContainerPr
       return new Response('Origin is disallowed', { status: 520 });
     }
 
-    // 2. outboundByHost always gets preference (runtime override)
+    // 2. allowedHosts: when set, acts as a whitelist gate — only matching
+    //    hosts can proceed. This gates everything below, including outboundByHost.
+    //    outboundByHost only maps a handler for a hostname, it does not allow it.
+    if (allowedHosts && allowedHosts.length > 0 && !matchesHostList(url.hostname, allowedHosts)) {
+      return new Response('Origin is disallowed', { status: 520 });
+    }
+
+    // 3. outboundByHost (runtime override)
     const outboundByHostOverride = outboundByHostOverrides?.[url.hostname];
     if (outboundByHostOverride && handlers?.[outboundByHostOverride.method]) {
       return handlers[outboundByHostOverride.method](request, this.env, {
@@ -335,16 +342,10 @@ export class ContainerProxy extends WorkerEntrypoint<Cloudflare.Env, ContainerPr
       });
     }
 
-    // 3. outboundByHost always gets preference (static)
+    // 4. outboundByHost (static)
     const handlersByHost = outboundByHostRegistry.get(className);
     if (handlersByHost && url.hostname in handlersByHost) {
       return handlersByHost[url.hostname](request, this.env, baseCtx);
-    }
-
-    // 4. allowedHosts: when set, acts as a whitelist gate — only matching
-    //    hosts can proceed to the catch-all outbound or internet.
-    if (allowedHosts && allowedHosts.length > 0 && !matchesHostList(url.hostname, allowedHosts)) {
-      return new Response('Origin is disallowed', { status: 520 });
     }
 
     // 5. Runtime catch-all handler override
