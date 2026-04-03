@@ -3,7 +3,7 @@
   "name": "egress-workers",
   "main": "src/index.ts",
   "compatibility_date": "2026-02-06",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": ["nodejs_compat", "experimental"],
   "observability": {
     "enabled": true,
   },

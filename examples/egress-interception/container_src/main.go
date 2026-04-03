@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"log"
@@ -29,6 +31,46 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			w.WriteHeader(520)
 			io.WriteString(w, "error connecting to proxy: "+err.Error())
+			return
+		}
+
+		w.Write(body)
+		return
+	}
+
+	if p := r.URL.Query().Get("proxy_https"); p != "" {
+		// Load the Cloudflare containers CA certificate so the container
+		// trusts HTTPS interception by the runtime.
+		caCert, err := os.ReadFile("/etc/cloudflare/certs/cloudflare-containers-ca.crt")
+		if err != nil {
+			w.WriteHeader(520)
+			io.WriteString(w, "error reading CA cert: "+err.Error())
+			return
+		}
+
+		certPool := x509.NewCertPool()
+		certPool.AppendCertsFromPEM(caCert)
+
+		client := &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					RootCAs: certPool,
+				},
+			},
+		}
+
+		res, err := client.Get("https://" + p)
+		if err != nil {
+			w.WriteHeader(520)
+			io.WriteString(w, "error connecting to proxy_https: "+err.Error())
+			return
+		}
+
+		w.WriteHeader(res.StatusCode)
+		body, err := io.ReadAll(res.Body)
+		if err != nil {
+			w.WriteHeader(520)
+			io.WriteString(w, "error reading proxy_https response: "+err.Error())
 			return
 		}
 
