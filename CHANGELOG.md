@@ -1,5 +1,11 @@
 # @cloudflare/containers
 
+## 0.2.3
+
+### Patch Changes
+
+- 1e29d6f: Handle Blob WebSocket messages by converting to ArrayBuffer before forwarding between client and container
+
 ## 0.2.2
 
 ### Patch Changes
