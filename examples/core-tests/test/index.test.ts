@@ -57,6 +57,30 @@ describe('core functionality', () => {
       expect(output.match(/onStart hook called/g)).toHaveLength(1);
     });
 
+    test('containerFetch preserves 204 no content responses', async () => {
+      const runner = new WranglerDevRunner();
+
+      const url = await runner.getUrl();
+      const id = randomUUID();
+
+      try {
+        const response = await vi.waitFor(
+          async () => {
+            const res = await fetch(`${url}/containerFetchNoContent?id=${id}`);
+            if (res.status !== 204) {
+              throw new Error(`Expected status 204, got ${res.status}. Body: ${await res.text()}`);
+            }
+            return res;
+          },
+          { timeout: 10000 }
+        );
+
+        expect(await response.text()).toBe('');
+      } finally {
+        await runner.destroy([id]);
+      }
+    });
+
     test('startAndWaitForPorts', async () => {
       const runner = new WranglerDevRunner();
 

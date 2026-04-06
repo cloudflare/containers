@@ -1079,7 +1079,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
         return new Response(null, { status: 101, webSocket: client });
       }
 
-      if (res.body !== undefined) {
+      if (res.body !== null) {
         let { readable, writable } = new TransformStream();
         res.body?.pipeTo(writable).finally(() => {
           this.decrementInflight();
