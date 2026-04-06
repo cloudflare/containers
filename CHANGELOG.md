@@ -1,5 +1,11 @@
 # @cloudflare/containers
 
+## 0.2.4
+
+### Patch Changes
+
+- ad96a97: Fix `containerFetch()` throwing on proxied bodyless responses by skipping response reconstruction when `Response.body` is `null`.
+
 ## 0.2.3
 
 ### Patch Changes
