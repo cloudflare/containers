@@ -64,6 +64,10 @@ export default {
       console.log('Handling containerFetch request');
       return container.containerFetch(request);
     }
+    if (url.pathname === '/containerFetchNoContent') {
+      console.log('Handling 204 no-content containerFetch request');
+      return container.containerFetch(request);
+    }
     if (url.pathname === '/fetch') {
       console.log('Handling http fetch request');
       return container.fetch(request);
