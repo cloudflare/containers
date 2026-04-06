@@ -1028,20 +1028,22 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
         server.accept();
 
         // Forward messages from client to container
-        server.addEventListener('message', (event: MessageEvent) => {
+        server.addEventListener('message', async (event: MessageEvent) => {
           this.renewActivityTimeout();
           try {
-            containerWs.send(event.data);
+            const data = event.data instanceof Blob ? await event.data.arrayBuffer() : event.data;
+            containerWs.send(data);
           } catch {
             server.close(1011, 'Failed to forward message to container');
           }
         });
 
         // Forward messages from container to client
-        containerWs.addEventListener('message', (event: MessageEvent) => {
+        containerWs.addEventListener('message', async (event: MessageEvent) => {
           this.renewActivityTimeout();
           try {
-            server.send(event.data);
+            const data = event.data instanceof Blob ? await event.data.arrayBuffer() : event.data;
+            server.send(data);
           } catch {
             containerWs.close(1011, 'Failed to forward message to client');
           }
