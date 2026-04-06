@@ -198,6 +198,30 @@ function addTimeoutSignal(existingSignal: AbortSignal | undefined, timeoutMs: nu
   return controller.signal;
 }
 
+// ==== Glob helpers ====
+
+/**
+ * Matches a value against a simple glob pattern where `*` matches
+ * any sequence of characters. e.g. `google.*.com`, `*.example.com`, `goo*gle`
+ */
+function simpleGlobMatch(pattern: string, value: string): boolean {
+  const parts = pattern.split('*');
+  if (parts.length === 1) return pattern === value;
+  if (!value.startsWith(parts[0])) return false;
+  if (!value.endsWith(parts[parts.length - 1])) return false;
+  let pos = parts[0].length;
+  for (let i = 1; i < parts.length - 1; i++) {
+    const idx = value.indexOf(parts[i], pos);
+    if (idx === -1) return false;
+    pos = idx + parts[i].length;
+  }
+  return pos <= value.length - parts[parts.length - 1].length;
+}
+
+function matchesHostList(hostname: string, patterns: string[]): boolean {
+  return patterns.some(pattern => simpleGlobMatch(pattern, hostname));
+}
+
 // ===============================
 //     CONTAINER STATE WRAPPER
 // ===============================
@@ -269,11 +293,17 @@ type ContainerProxyOptions = {
   className: string;
   outboundByHostOverrides?: OutboundByHostOverrides;
   outboundHandlerOverride?: OutboundHandlerOverride;
+  allowedHosts?: string[];
+  deniedHosts?: string[];
 };
 
 type PersistedOutboundConfiguration = Pick<
   ContainerProxyOptions,
-  'enableInternet' | 'outboundByHostOverrides' | 'outboundHandlerOverride'
+  | 'enableInternet'
+  | 'outboundByHostOverrides'
+  | 'outboundHandlerOverride'
+  | 'allowedHosts'
+  | 'deniedHosts'
 >;
 
 export class ContainerProxy extends WorkerEntrypoint<Cloudflare.Env, ContainerProxyOptions> {
@@ -285,11 +315,18 @@ export class ContainerProxy extends WorkerEntrypoint<Cloudflare.Env, ContainerPr
       outboundByHostOverrides,
       outboundHandlerOverride,
       enableInternet,
+      allowedHosts,
+      deniedHosts,
     } = this.ctx.props;
     const handlers = outboundHandlersRegistry.get(className);
     const baseCtx = { containerId, className };
 
-    // Runtime handler override takes priority over static outboundByHost
+    // 1. deniedHosts: overrides everything, blocks unconditionally
+    if (deniedHosts && matchesHostList(url.hostname, deniedHosts)) {
+      return new Response('Origin is disallowed', { status: 520 });
+    }
+
+    // 2. outboundByHost always gets preference (runtime override)
     const outboundByHostOverride = outboundByHostOverrides?.[url.hostname];
     if (outboundByHostOverride && handlers?.[outboundByHostOverride.method]) {
       return handlers[outboundByHostOverride.method](request, this.env, {
@@ -298,13 +335,19 @@ export class ContainerProxy extends WorkerEntrypoint<Cloudflare.Env, ContainerPr
       });
     }
 
-    // Static outboundByHost
+    // 3. outboundByHost always gets preference (static)
     const handlersByHost = outboundByHostRegistry.get(className);
     if (handlersByHost && url.hostname in handlersByHost) {
       return handlersByHost[url.hostname](request, this.env, baseCtx);
     }
 
-    // Runtime catch-all handler override
+    // 4. allowedHosts: when set, acts as a whitelist gate — only matching
+    //    hosts can proceed to the catch-all outbound or internet.
+    if (allowedHosts && allowedHosts.length > 0 && !matchesHostList(url.hostname, allowedHosts)) {
+      return new Response('Origin is disallowed', { status: 520 });
+    }
+
+    // 5. Runtime catch-all handler override
     if (outboundHandlerOverride && handlers?.[outboundHandlerOverride.method]) {
       return handlers[outboundHandlerOverride.method](request, this.env, {
         ...baseCtx,
@@ -312,13 +355,18 @@ export class ContainerProxy extends WorkerEntrypoint<Cloudflare.Env, ContainerPr
       });
     }
 
-    // Default catch-all handler (static outbound)
+    // 6. Default catch-all handler (static outbound)
     const defaultOutboundHandlerName = defaultOutboundHandlerNameRegistry.get(className);
     if (defaultOutboundHandlerName && handlers?.[defaultOutboundHandlerName]) {
       return handlers[defaultOutboundHandlerName](request, this.env, baseCtx);
     }
 
-    // enableInternet fallback
+    // 7. If the host was explicitly allowed and no outbound handled it, grant internet
+    if (allowedHosts && allowedHosts.length > 0) {
+      return fetch(request);
+    }
+
+    // 8. enableInternet fallback
     if (enableInternet) {
       return fetch(request);
     }
@@ -403,6 +451,18 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   entrypoint: ContainerStartOptions['entrypoint'];
   enableInternet: ContainerStartOptions['enableInternet'] = true;
 
+  // When true, outbound HTTPS traffic from the container will be intercepted.
+  // The container must trust /etc/cloudflare/certs/cloudflare-containers-ca.crt
+  interceptHttps: boolean = false;
+
+  // Hosts that are allowed to access the internet, even when enableInternet is false.
+  // Useful for allowing specific domains on a per-host basis.
+  allowedHosts: string[] = [];
+
+  // Hosts that are denied internet access, even when enableInternet is true.
+  // Also blocks hosts from being handled by the catch-all outbound handler.
+  deniedHosts: string[] = [];
+
   // pingEndpoint is the host and path value that the class will use to send a request to the container and check if the
   // instance is ready.
   //
@@ -443,7 +503,9 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       persistedOutboundConfiguration !== undefined ||
       ctor.outboundByHost !== undefined ||
       ctor.outbound !== undefined ||
-      ctor.outboundHandlers !== undefined
+      ctor.outboundHandlers !== undefined ||
+      this.allowedHosts.length > 0 ||
+      this.deniedHosts.length > 0
     ) {
       this.usingInterception = true;
       this.applyOutboundInterceptionPromise = this.applyOutboundInterception();
@@ -561,6 +623,81 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
         typeof handler === 'string' ? { method: handler } : handler,
       ])
     );
+    await this.refreshOutboundInterception();
+  }
+
+  // ====================================
+  //     ALLOWED / DENIED HOSTS CONFIG
+  // ====================================
+
+  /**
+   * Replace all allowed hosts at runtime.
+   * Allowed hosts get internet access even when `enableInternet` is false.
+   *
+   * @param hosts - Array of hostnames to allow (e.g. `['api.stripe.com', 'example.com']`)
+   */
+  async setAllowedHosts(hosts: string[]): Promise<void> {
+    this.allowedHosts = [...hosts];
+    this.usingInterception = true;
+    await this.refreshOutboundInterception();
+  }
+
+  /**
+   * Replace all denied hosts at runtime.
+   * Denied hosts are blocked unconditionally, even when `enableInternet` is true
+   * or a catch-all outbound handler is set.
+   *
+   * @param hosts - Array of hostnames to deny (e.g. `['evil.com', 'blocked.org']`)
+   */
+  async setDeniedHosts(hosts: string[]): Promise<void> {
+    this.deniedHosts = [...hosts];
+    this.usingInterception = true;
+    await this.refreshOutboundInterception();
+  }
+
+  /**
+   * Add a single hostname to the allowed hosts list at runtime.
+   *
+   * @param hostname - The hostname to allow (e.g. `'api.stripe.com'`)
+   */
+  async allowHost(hostname: string): Promise<void> {
+    if (!this.allowedHosts.includes(hostname)) {
+      this.allowedHosts = [...this.allowedHosts, hostname];
+    }
+    this.usingInterception = true;
+    await this.refreshOutboundInterception();
+  }
+
+  /**
+   * Add a single hostname to the denied hosts list at runtime.
+   *
+   * @param hostname - The hostname to deny (e.g. `'evil.com'`)
+   */
+  async denyHost(hostname: string): Promise<void> {
+    if (!this.deniedHosts.includes(hostname)) {
+      this.deniedHosts = [...this.deniedHosts, hostname];
+    }
+    this.usingInterception = true;
+    await this.refreshOutboundInterception();
+  }
+
+  /**
+   * Remove a hostname from the allowed hosts list.
+   *
+   * @param hostname - The hostname to remove from the allow list
+   */
+  async removeAllowedHost(hostname: string): Promise<void> {
+    this.allowedHosts = this.allowedHosts.filter(h => h !== hostname);
+    await this.refreshOutboundInterception();
+  }
+
+  /**
+   * Remove a hostname from the denied hosts list.
+   *
+   * @param hostname - The hostname to remove from the deny list
+   */
+  async removeDeniedHost(hostname: string): Promise<void> {
+    this.deniedHosts = this.deniedHosts.filter(h => h !== hostname);
     await this.refreshOutboundInterception();
   }
 
@@ -1188,6 +1325,8 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
           ? this.outboundByHostOverrides
           : undefined,
       outboundHandlerOverride: this.outboundHandlerOverride,
+      allowedHosts: this.allowedHosts.length > 0 ? this.allowedHosts : undefined,
+      deniedHosts: this.deniedHosts.length > 0 ? this.deniedHosts : undefined,
     };
   }
 
@@ -1230,7 +1369,59 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       }
     }
 
+    if (configuration.allowedHosts) {
+      this.allowedHosts = configuration.allowedHosts;
+    }
+
+    if (configuration.deniedHosts) {
+      this.deniedHosts = configuration.deniedHosts;
+    }
+
     return this.getOutboundConfiguration();
+  }
+
+  /**
+   * Returns true if a catch-all outbound HTTP interception is needed.
+   * This is the case when a static `outbound` handler or a runtime
+   * `outboundHandlerOverride` (catch-all) is configured.
+   * When false, we only intercept specific hosts to avoid overhead.
+   */
+  private needsCatchAllInterception(): boolean {
+    const ctor = this.constructor as typeof Container;
+    return ctor.outbound !== undefined || this.outboundHandlerOverride !== undefined;
+  }
+
+  /**
+   * Collects all hostnames that need per-host outbound interception.
+   * This is the union of:
+   * - Static `outboundByHost` keys
+   * - Runtime `outboundByHostOverrides` keys
+   * - `allowedHosts`
+   * - `deniedHosts`
+   */
+  private getHostsToIntercept(): string[] {
+    const hosts = new Set<string>();
+    const ctor = this.constructor as typeof Container;
+
+    if (ctor.outboundByHost) {
+      for (const hostname of Object.keys(ctor.outboundByHost)) {
+        hosts.add(hostname);
+      }
+    }
+
+    for (const hostname of Object.keys(this.outboundByHostOverrides)) {
+      hosts.add(hostname);
+    }
+
+    for (const hostname of this.allowedHosts) {
+      hosts.add(hostname);
+    }
+
+    for (const hostname of this.deniedHosts) {
+      hosts.add(hostname);
+    }
+
+    return [...hosts];
   }
 
   private async refreshOutboundInterception(): Promise<void> {
@@ -1245,6 +1436,14 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   /**
    * Applies (or re-applies) outbound HTTP interception with the current
    * default registries + runtime overrides passed through ContainerProxy props.
+   *
+   * Uses `interceptAllOutboundHttp` only when a catch-all outbound handler is
+   * configured. Otherwise, sets up per-host interception for known hosts only,
+   * avoiding unnecessary overhead for unintercepted traffic.
+   *
+   * When `interceptHttps` is enabled, also applies HTTPS interception:
+   * - Catch-all mode: `interceptOutboundHttps('*', ...)` for all HTTPS traffic
+   * - Per-host mode: `interceptOutboundHttps(host, ...)` for each known host
    */
   private async applyOutboundInterception(): Promise<void> {
     const ctx = this.ctx as unknown as {
@@ -1265,17 +1464,41 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     const outboundConfiguration = this.getOutboundConfiguration();
     this.persistOutboundConfiguration(outboundConfiguration);
 
-    await this.container.interceptAllOutboundHttp(
-      ctx.exports.ContainerProxy({
-        props: {
-          enableInternet: outboundConfiguration.enableInternet,
-          containerId: this.ctx.id.toString(),
-          className: this.constructor.name,
-          outboundByHostOverrides: outboundConfiguration.outboundByHostOverrides,
-          outboundHandlerOverride: outboundConfiguration.outboundHandlerOverride,
-        },
-      })
-    );
+    const fetcher = ctx.exports.ContainerProxy({
+      props: {
+        enableInternet: outboundConfiguration.enableInternet,
+        containerId: this.ctx.id.toString(),
+        className: this.constructor.name,
+        outboundByHostOverrides: outboundConfiguration.outboundByHostOverrides,
+        outboundHandlerOverride: outboundConfiguration.outboundHandlerOverride,
+        allowedHosts: outboundConfiguration.allowedHosts,
+        deniedHosts: outboundConfiguration.deniedHosts,
+      },
+    });
+
+    const needsCatchAll = this.needsCatchAllInterception();
+
+    if (needsCatchAll) {
+      // Catch-all: intercept all outbound HTTP traffic
+      await this.container.interceptAllOutboundHttp(fetcher);
+
+      // If HTTPS interception is enabled, intercept all HTTPS traffic too
+      if (this.interceptHttps) {
+        // @ts-expect-error interceptOutboundHttps is not yet in @cloudflare/workers-types
+        await this.container.interceptOutboundHttps('*', fetcher);
+      }
+    } else {
+      // Per-host: only intercept traffic for known hosts
+      const hosts = this.getHostsToIntercept();
+      for (const host of hosts) {
+        await this.container.interceptOutboundHttp(host, fetcher);
+
+        if (this.interceptHttps) {
+          // @ts-expect-error interceptOutboundHttps is not yet in @cloudflare/workers-types
+          await this.container.interceptOutboundHttps(host, fetcher);
+        }
+      }
+    }
   }
 
   /**

@@ -7,6 +7,9 @@ export class MyContainer extends Container {
   defaultPort = 8080; // The default port for the container to listen on
   sleepAfter = '10s'; // Sleep the container if no requests are made in this timeframe
   enableInternet = false;
+  interceptHttps = true;
+  allowedHosts = ['example.com'];
+  deniedHosts = ['example2.com'];
 
   // default env vars to set in the container when starting
   envVars = {
@@ -35,8 +38,8 @@ export default {
     request: Request,
     env: { MY_CONTAINER: DurableObjectNamespace<MyContainer> }
   ): Promise<Response> {
-    if (!request.url.includes('proxy=')) {
-      return new Response('?proxy= param should be set to point to a domain');
+    if (!request.url.includes('proxy=') && !request.url.includes('proxy_https=')) {
+      return new Response('?proxy= or ?proxy_https= param should be set to point to a domain');
     }
 
     // getContainer will return a specific instance if no second argument is provided
