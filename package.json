@@ -1,6 +1,6 @@
 {
   "name": "@cloudflare/containers",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Helper class for container-enabled Durable Objects",
   "repository": {
     "type": "git",
