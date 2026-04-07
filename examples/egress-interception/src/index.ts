@@ -8,6 +8,11 @@ export class MyContainer extends Container {
   sleepAfter = '10s'; // Sleep the container if no requests are made in this timeframe
   enableInternet = false;
   interceptHttps = true;
+  entrypoint = [
+    'sh',
+    '-lc',
+    'cp /etc/cloudflare/certs/cloudflare-containers-ca.crt /usr/local/share/ca-certificates/cloudflare-containers-ca.crt && update-ca-certificates && exec /server',
+  ];
   allowedHosts = ['example.com', '*.google.com'];
   deniedHosts = ['example2.com'];
 

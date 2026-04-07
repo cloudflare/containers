@@ -39,16 +39,58 @@ interceptHttps = true;
 **Trusting the CA certificate in your container:**
 
 The CA certificate is ephemeral and only available at runtime, so it cannot be
-baked into your Docker image. Instead, trust it in your entrypoint before your
+baked into your Docker image. Instead, copy it into the distro's certificate
+directory and refresh the trust store in your entrypoint before your
 application starts.
 
-On Debian/Ubuntu based containers:
+| Distribution  | Certificate directory                        | Update command           |
+| ------------- | -------------------------------------------- | ------------------------ |
+| Alpine        | `/usr/local/share/ca-certificates/`          | `update-ca-certificates` |
+| Debian/Ubuntu | `/usr/local/share/ca-certificates/`          | `update-ca-certificates` |
+| Fedora/RHEL   | `/etc/pki/ca-trust/source/anchors/`          | `update-ca-trust`        |
+| Arch          | `/etc/ca-certificates/trust-source/anchors/` | `trust extract-compat`   |
 
-```bash
+Example entrypoint snippets:
+
+Alpine or Debian/Ubuntu:
+
+```sh
 cp /etc/cloudflare/certs/cloudflare-containers-ca.crt \
-   /usr/local/share/ca-certificates/cloudflare-containers-ca.crt && \
+  /usr/local/share/ca-certificates/cloudflare-containers-ca.crt && \
 update-ca-certificates
 ```
+
+Fedora or RHEL:
+
+```sh
+cp /etc/cloudflare/certs/cloudflare-containers-ca.crt \
+  /etc/pki/ca-trust/source/anchors/cloudflare-containers-ca.crt && \
+update-ca-trust
+```
+
+Arch:
+
+```sh
+cp /etc/cloudflare/certs/cloudflare-containers-ca.crt \
+  /etc/ca-certificates/trust-source/anchors/cloudflare-containers-ca.crt && \
+trust extract-compat
+```
+
+Alpine/Debian/Ubuntu `Container` entrypoint example:
+
+```ts
+export class MyContainer extends Container {
+  interceptHttps = true;
+  entrypoint = [
+    'sh',
+    '-lc',
+    'cp /etc/cloudflare/certs/cloudflare-containers-ca.crt /usr/local/share/ca-certificates/cloudflare-containers-ca.crt && update-ca-certificates && exec node server.js',
+  ];
+}
+```
+
+For Fedora/RHEL or Arch, swap the destination path and trust-store refresh
+command to match the table above.
 
 Most languages and HTTP clients (curl, Node.js, Python requests, Go's
 `net/http`) will then trust it automatically via the system root store.
