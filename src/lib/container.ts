@@ -1503,7 +1503,6 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
 
       // If HTTPS interception is enabled, intercept all HTTPS traffic too
       if (this.interceptHttps) {
-        // @ts-expect-error interceptOutboundHttps is not yet in @cloudflare/workers-types
         await this.container.interceptOutboundHttps('*', fetcher);
       }
     } else {
@@ -1513,7 +1512,6 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
         await this.container.interceptOutboundHttp(host, fetcher);
 
         if (this.interceptHttps) {
-          // @ts-expect-error interceptOutboundHttps is not yet in @cloudflare/workers-types
           await this.container.interceptOutboundHttps(host, fetcher);
         }
       }
