@@ -1,16 +1,13 @@
 {
-  "name": "containers-test-fixture",
+  "name": "egress-tests",
   "version": "1.0.0",
-  "description": "Integration test fixture for @cloudflare/containers",
+  "description": "Integration tests for egress interception",
   "type": "module",
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:local": "vitest run -t 'Local Instance Tests'",
-    "test:deployed": "vitest run -t 'Deployed Instance Tests'",
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "build": "tsc"
+    "deploy": "wrangler deploy"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

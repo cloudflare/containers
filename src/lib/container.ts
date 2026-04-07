@@ -490,28 +490,28 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
 
     this.state = new ContainerState(this.ctx.storage);
 
+    const persistedOutboundConfiguration = this.restoreOutboundConfiguration();
     this.ctx.blockConcurrencyWhile(async () => {
       this.renewActivityTimeout();
 
       // First thing, schedule the next alarms
       await this.scheduleNextAlarm();
+
+      const ctor = this.constructor as typeof Container;
+      if (
+        persistedOutboundConfiguration !== undefined ||
+        ctor.outboundByHost !== undefined ||
+        ctor.outbound !== undefined ||
+        ctor.outboundHandlers !== undefined ||
+        this.effectiveAllowedHosts !== undefined ||
+        this.effectiveDeniedHosts !== undefined
+      ) {
+        this.usingInterception = true;
+        this.applyOutboundInterceptionPromise = this.applyOutboundInterception();
+      }
     });
 
     this.container = ctx.container;
-    const persistedOutboundConfiguration = this.restoreOutboundConfiguration();
-    const ctor = this.constructor as typeof Container;
-    if (
-      persistedOutboundConfiguration !== undefined ||
-      ctor.outboundByHost !== undefined ||
-      ctor.outbound !== undefined ||
-      ctor.outboundHandlers !== undefined ||
-      this.effectiveAllowedHosts !== undefined ||
-      this.effectiveDeniedHosts !== undefined
-    ) {
-      this.usingInterception = true;
-      this.applyOutboundInterceptionPromise = this.applyOutboundInterception();
-    }
-
     // Apply options if provided
     if (options) {
       if (options.defaultPort !== undefined) this.defaultPort = options.defaultPort;
@@ -1786,8 +1786,12 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    * Executes any scheduled tasks that are due
    */
 
-  override async alarm(alarmProps: { isRetry: boolean; retryCount: number }): Promise<void> {
-    if (alarmProps.isRetry && alarmProps.retryCount > MAX_ALARM_RETRIES) {
+  override async alarm(alarmProps?: { isRetry: boolean; retryCount: number }): Promise<void> {
+    if (
+      alarmProps !== undefined &&
+      alarmProps.isRetry &&
+      alarmProps.retryCount > MAX_ALARM_RETRIES
+    ) {
       const scheduleCount =
         Number(this.sql`SELECT COUNT(*) as count FROM container_schedules`[0]?.count) || 0;
       const hasScheduledTasks = scheduleCount > 0;
