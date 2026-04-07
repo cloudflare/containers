@@ -8,9 +8,9 @@ import { randomUUID } from 'node:crypto';
  * EgressTestContainer is configured with:
  *   enableInternet = false
  *   interceptHttps = true
- *   allowedHosts  = ['allowed.com', 'by-host.com']
+ *   allowedHosts  = ['allowed.com', 'by-host.com', '*.globtest.com']
  *   deniedHosts   = ['denied.com']
- *   outboundByHost = { 'by-host.com': handler }
+ *   outboundByHost = { 'by-host.com': handler, '*.globtest.com': handler }
  *   outbound       = catch-all handler
  */
 describe('egress interception', () => {
@@ -101,6 +101,47 @@ describe('egress interception', () => {
 
       try {
         const res = await proxyVia(runner, id, 'denied.com');
+        expect(res.status).toBe(520);
+      } finally {
+        await destroyEgress(runner, id);
+      }
+    });
+
+    test('glob pattern in outboundByHost matches subdomains', async () => {
+      const runner = new WranglerDevRunner();
+      const id = randomUUID();
+
+      try {
+        const res = await proxyVia(runner, id, 'api.globtest.com');
+        expect(res.status).toBe(200);
+        const body = await res.text();
+        expect(body).toBe('outboundByHost glob: api.globtest.com');
+      } finally {
+        await destroyEgress(runner, id);
+      }
+    });
+
+    test('glob pattern in outboundByHost matches deeply nested subdomains', async () => {
+      const runner = new WranglerDevRunner();
+      const id = randomUUID();
+
+      try {
+        const res = await proxyVia(runner, id, 'a.b.globtest.com');
+        expect(res.status).toBe(200);
+        const body = await res.text();
+        expect(body).toBe('outboundByHost glob: a.b.globtest.com');
+      } finally {
+        await destroyEgress(runner, id);
+      }
+    });
+
+    test('glob pattern in allowedHosts blocks non-matching host', async () => {
+      const runner = new WranglerDevRunner();
+      const id = randomUUID();
+
+      try {
+        // globtest.com itself does NOT match *.globtest.com
+        const res = await proxyVia(runner, id, 'globtest.com');
         expect(res.status).toBe(520);
       } finally {
         await destroyEgress(runner, id);

@@ -295,6 +295,9 @@ type ContainerProxyOptions = {
   outboundHandlerOverride?: OutboundHandlerOverride;
   allowedHosts?: string[];
   deniedHosts?: string[];
+  // When false, this proxy only handles specific intercepted hosts —
+  // catch-all handler lookups and enableInternet fallback are skipped.
+  catchAll?: boolean;
 };
 
 type PersistedOutboundConfiguration = Pick<
@@ -317,8 +320,8 @@ export class ContainerProxy extends WorkerEntrypoint<Cloudflare.Env, ContainerPr
       enableInternet,
       allowedHosts,
       deniedHosts,
+      catchAll,
     } = this.ctx.props;
-    const handlers = outboundHandlersRegistry.get(className);
     const baseCtx = { containerId, className };
 
     // 1. deniedHosts: overrides everything, blocks unconditionally
@@ -333,19 +336,43 @@ export class ContainerProxy extends WorkerEntrypoint<Cloudflare.Env, ContainerPr
       return new Response('Origin is disallowed', { status: 520 });
     }
 
-    // 3. outboundByHost (runtime override)
-    const outboundByHostOverride = outboundByHostOverrides?.[url.hostname];
-    if (outboundByHostOverride && handlers?.[outboundByHostOverride.method]) {
-      return handlers[outboundByHostOverride.method](request, this.env, {
-        ...baseCtx,
-        params: outboundByHostOverride.params,
-      });
+    // 3. outboundByHost (runtime override) — exact match then glob
+    const handlers = outboundHandlersRegistry.get(className);
+    if (outboundByHostOverrides && handlers) {
+      const override =
+        outboundByHostOverrides[url.hostname] ??
+        Object.entries(outboundByHostOverrides).find(
+          ([pattern]) => pattern !== url.hostname && simpleGlobMatch(pattern, url.hostname)
+        )?.[1];
+      if (override && handlers[override.method]) {
+        return handlers[override.method](request, this.env, {
+          ...baseCtx,
+          params: override.params,
+        });
+      }
     }
 
-    // 4. outboundByHost (static)
+    // 4. outboundByHost (static) — exact match then glob
     const handlersByHost = outboundByHostRegistry.get(className);
-    if (handlersByHost && url.hostname in handlersByHost) {
-      return handlersByHost[url.hostname](request, this.env, baseCtx);
+    if (handlersByHost) {
+      const handler =
+        handlersByHost[url.hostname] ??
+        Object.entries(handlersByHost).find(
+          ([pattern]) => pattern !== url.hostname && simpleGlobMatch(pattern, url.hostname)
+        )?.[1];
+      if (handler) {
+        return handler(request, this.env, baseCtx);
+      }
+    }
+
+    // In per-host mode, only specific hosts were intercepted.
+    // No catch-all or enableInternet fallback applies — if no handler
+    // matched above, the host was intercepted for allow/deny only.
+    if (!catchAll) {
+      if (allowedHosts) {
+        return fetch(request);
+      }
+      return new Response('Origin is disallowed', { status: 520 });
     }
 
     // 5. Runtime catch-all handler override
@@ -1483,6 +1510,8 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     const outboundConfiguration = this.getOutboundConfiguration();
     this.persistOutboundConfiguration(outboundConfiguration);
 
+    const needsCatchAll = this.needsCatchAllInterception();
+
     const fetcher = ctx.exports.ContainerProxy({
       props: {
         enableInternet: outboundConfiguration.enableInternet,
@@ -1492,10 +1521,9 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
         outboundHandlerOverride: outboundConfiguration.outboundHandlerOverride,
         allowedHosts: outboundConfiguration.allowedHosts,
         deniedHosts: outboundConfiguration.deniedHosts,
+        catchAll: needsCatchAll,
       },
     });
-
-    const needsCatchAll = this.needsCatchAllInterception();
 
     if (needsCatchAll) {
       // Catch-all: intercept all outbound HTTP traffic

@@ -11,7 +11,7 @@ export class EgressTestContainer extends Container {
 
   // allowedHosts gates everything: only these hosts can reach outbound/internet.
   // 'by-host.com' is included so the outboundByHost handler can run.
-  allowedHosts = ['allowed.com', 'by-host.com'];
+  allowedHosts = ['allowed.com', 'by-host.com', '*.globtest.com'];
   deniedHosts = ['denied.com'];
 
   constructor(ctx: any, env: any) {
@@ -26,6 +26,9 @@ export class EgressTestContainer extends Container {
 EgressTestContainer.outboundByHost = {
   'by-host.com': (_req: Request) => {
     return new Response('outboundByHost: by-host.com');
+  },
+  '*.globtest.com': (req: Request) => {
+    return new Response('outboundByHost glob: ' + new URL(req.url).hostname);
   },
 };
 

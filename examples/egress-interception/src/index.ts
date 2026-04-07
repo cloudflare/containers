@@ -8,7 +8,7 @@ export class MyContainer extends Container {
   sleepAfter = '10s'; // Sleep the container if no requests are made in this timeframe
   enableInternet = false;
   interceptHttps = true;
-  allowedHosts = ['example.com'];
+  allowedHosts = ['example.com', '*.google.com'];
   deniedHosts = ['example2.com'];
 
   // default env vars to set in the container when starting
@@ -17,6 +17,9 @@ export class MyContainer extends Container {
   };
 
   static outboundByHost = {
+    '*.google.com': (_req: Request, _env: unknown, ctx: OutboundHandlerContext) => {
+      return new Response('Hi, ' + ctx.containerId + ' I am google');
+    },
     'google.com': (_req: Request, _env: unknown, ctx: OutboundHandlerContext) => {
       return new Response('Hi, ' + ctx.containerId + ' I am google');
     },
@@ -45,7 +48,6 @@ export default {
     // getContainer will return a specific instance if no second argument is provided
     const container = getContainer(env.MY_CONTAINER, 'hello3');
 
-    await container.setOutboundByHost('github.com', 'github', { hello: 'world' });
     return await container.fetch(request);
   },
 };
