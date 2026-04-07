@@ -329,7 +329,7 @@ export class ContainerProxy extends WorkerEntrypoint<Cloudflare.Env, ContainerPr
     // 2. allowedHosts: when set, acts as a whitelist gate — only matching
     //    hosts can proceed. This gates everything below, including outboundByHost.
     //    outboundByHost only maps a handler for a hostname, it does not allow it.
-    if (allowedHosts && allowedHosts.length > 0 && !matchesHostList(url.hostname, allowedHosts)) {
+    if (allowedHosts && !matchesHostList(url.hostname, allowedHosts)) {
       return new Response('Origin is disallowed', { status: 520 });
     }
 
@@ -363,7 +363,7 @@ export class ContainerProxy extends WorkerEntrypoint<Cloudflare.Env, ContainerPr
     }
 
     // 7. If the host was explicitly allowed and no outbound handled it, grant internet
-    if (allowedHosts && allowedHosts.length > 0) {
+    if (allowedHosts) {
       return fetch(request);
     }
 
@@ -458,11 +458,11 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
 
   // Hosts that are allowed to access the internet, even when enableInternet is false.
   // Useful for allowing specific domains on a per-host basis.
-  allowedHosts: string[] = [];
+  allowedHosts?: string[];
 
   // Hosts that are denied internet access, even when enableInternet is true.
   // Also blocks hosts from being handled by the catch-all outbound handler.
-  deniedHosts: string[] = [];
+  deniedHosts?: string[];
 
   // pingEndpoint is the host and path value that the class will use to send a request to the container and check if the
   // instance is ready.
@@ -505,8 +505,8 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       ctor.outboundByHost !== undefined ||
       ctor.outbound !== undefined ||
       ctor.outboundHandlers !== undefined ||
-      this.allowedHosts.length > 0 ||
-      this.deniedHosts.length > 0
+      this.effectiveAllowedHosts !== undefined ||
+      this.effectiveDeniedHosts !== undefined
     ) {
       this.usingInterception = true;
       this.applyOutboundInterceptionPromise = this.applyOutboundInterception();
@@ -638,7 +638,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    * @param hosts - Array of hostnames to allow (e.g. `['api.stripe.com', 'example.com']`)
    */
   async setAllowedHosts(hosts: string[]): Promise<void> {
-    this.allowedHosts = [...hosts];
+    this.allowedHostsOverride = [...hosts];
     this.usingInterception = true;
     await this.refreshOutboundInterception();
   }
@@ -651,7 +651,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    * @param hosts - Array of hostnames to deny (e.g. `['evil.com', 'blocked.org']`)
    */
   async setDeniedHosts(hosts: string[]): Promise<void> {
-    this.deniedHosts = [...hosts];
+    this.deniedHostsOverride = [...hosts];
     this.usingInterception = true;
     await this.refreshOutboundInterception();
   }
@@ -662,8 +662,9 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    * @param hostname - The hostname to allow (e.g. `'api.stripe.com'`)
    */
   async allowHost(hostname: string): Promise<void> {
-    if (!this.allowedHosts.includes(hostname)) {
-      this.allowedHosts = [...this.allowedHosts, hostname];
+    const effective = this.effectiveAllowedHosts ?? [];
+    if (!effective.includes(hostname)) {
+      this.allowedHostsOverride = [...effective, hostname];
     }
     this.usingInterception = true;
     await this.refreshOutboundInterception();
@@ -675,8 +676,9 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    * @param hostname - The hostname to deny (e.g. `'evil.com'`)
    */
   async denyHost(hostname: string): Promise<void> {
-    if (!this.deniedHosts.includes(hostname)) {
-      this.deniedHosts = [...this.deniedHosts, hostname];
+    const effective = this.effectiveDeniedHosts ?? [];
+    if (!effective.includes(hostname)) {
+      this.deniedHostsOverride = [...effective, hostname];
     }
     this.usingInterception = true;
     await this.refreshOutboundInterception();
@@ -688,7 +690,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    * @param hostname - The hostname to remove from the allow list
    */
   async removeAllowedHost(hostname: string): Promise<void> {
-    this.allowedHosts = this.allowedHosts.filter(h => h !== hostname);
+    this.allowedHostsOverride = (this.effectiveAllowedHosts ?? []).filter(h => h !== hostname);
     await this.refreshOutboundInterception();
   }
 
@@ -698,7 +700,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    * @param hostname - The hostname to remove from the deny list
    */
   async removeDeniedHost(hostname: string): Promise<void> {
-    this.deniedHosts = this.deniedHosts.filter(h => h !== hostname);
+    this.deniedHostsOverride = (this.effectiveDeniedHosts ?? []).filter(h => h !== hostname);
     await this.refreshOutboundInterception();
   }
 
@@ -1301,6 +1303,10 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   private outboundByHostOverrides: OutboundByHostOverrides = {};
   private outboundHandlerOverride?: OutboundHandlerOverride;
 
+  // Only set when the user calls setAllowedHosts/setDeniedHosts at runtime
+  private allowedHostsOverride?: string[];
+  private deniedHostsOverride?: string[];
+
   // ==========================
   //     GENERAL HELPERS
   // ==========================
@@ -1318,6 +1324,14 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     }
   }
 
+  private get effectiveAllowedHosts(): string[] | undefined {
+    return this.allowedHostsOverride ?? this.allowedHosts;
+  }
+
+  private get effectiveDeniedHosts(): string[] | undefined {
+    return this.deniedHostsOverride ?? this.deniedHosts;
+  }
+
   private getOutboundConfiguration(): PersistedOutboundConfiguration {
     return {
       enableInternet: this.enableInternet,
@@ -1326,13 +1340,17 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
           ? this.outboundByHostOverrides
           : undefined,
       outboundHandlerOverride: this.outboundHandlerOverride,
-      allowedHosts: this.allowedHosts.length > 0 ? this.allowedHosts : undefined,
-      deniedHosts: this.deniedHosts.length > 0 ? this.deniedHosts : undefined,
+      allowedHosts: this.effectiveAllowedHosts,
+      deniedHosts: this.effectiveDeniedHosts,
     };
   }
 
   private persistOutboundConfiguration(configuration: PersistedOutboundConfiguration): void {
-    this.ctx.storage.kv.put(OUTBOUND_CONFIGURATION_KEY, configuration);
+    this.ctx.storage.kv.put(OUTBOUND_CONFIGURATION_KEY, {
+      ...configuration,
+      allowedHosts: this.allowedHostsOverride,
+      deniedHosts: this.deniedHostsOverride,
+    });
   }
 
   private restoreOutboundConfiguration(): PersistedOutboundConfiguration | undefined {
@@ -1371,11 +1389,11 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     }
 
     if (configuration.allowedHosts) {
-      this.allowedHosts = configuration.allowedHosts;
+      this.allowedHostsOverride = configuration.allowedHosts;
     }
 
     if (configuration.deniedHosts) {
-      this.deniedHosts = configuration.deniedHosts;
+      this.deniedHostsOverride = configuration.deniedHosts;
     }
 
     return this.getOutboundConfiguration();
@@ -1414,11 +1432,11 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       hosts.add(hostname);
     }
 
-    for (const hostname of this.allowedHosts) {
+    for (const hostname of this.effectiveAllowedHosts ?? []) {
       hosts.add(hostname);
     }
 
-    for (const hostname of this.deniedHosts) {
+    for (const hostname of this.effectiveDeniedHosts ?? []) {
       hosts.add(hostname);
     }
 
