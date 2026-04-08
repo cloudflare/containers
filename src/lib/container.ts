@@ -310,11 +310,7 @@ type ContainerProxyOptions = {
 
 type PersistedOutboundConfiguration = Pick<
   ContainerProxyOptions,
-  | 'enableInternet'
-  | 'outboundByHostOverrides'
-  | 'outboundHandlerOverride'
-  | 'allowedHosts'
-  | 'deniedHosts'
+  'outboundByHostOverrides' | 'outboundHandlerOverride' | 'allowedHosts' | 'deniedHosts'
 >;
 
 export class ContainerProxy extends WorkerEntrypoint<Cloudflare.Env, ContainerProxyOptions> {
@@ -347,6 +343,7 @@ export class ContainerProxy extends WorkerEntrypoint<Cloudflare.Env, ContainerPr
 
     // 3. outboundByHost (runtime override) — exact match then glob
     const handlers = outboundHandlersRegistry.get(className);
+
     if (outboundByHostOverrides && handlers) {
       const override =
         outboundByHostOverrides[hostname] ??
@@ -381,6 +378,7 @@ export class ContainerProxy extends WorkerEntrypoint<Cloudflare.Env, ContainerPr
       if (allowedHosts) {
         return fetch(request);
       }
+
       return new Response('Origin is disallowed', { status: 520 });
     }
 
@@ -1382,7 +1380,6 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
 
   private getOutboundConfiguration(): PersistedOutboundConfiguration {
     return {
-      enableInternet: this.enableInternet,
       outboundByHostOverrides:
         Object.keys(this.outboundByHostOverrides).length > 0
           ? this.outboundByHostOverrides
@@ -1408,10 +1405,6 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
 
     if (!configuration) {
       return undefined;
-    }
-
-    if (configuration.enableInternet !== undefined) {
-      this.enableInternet = configuration.enableInternet;
     }
 
     this.outboundHandlerOverride = undefined;
@@ -1515,7 +1508,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     const outboundConfiguration = this.getOutboundConfiguration();
     const fetcher = ctx.exports.ContainerProxy({
       props: {
-        enableInternet: outboundConfiguration.enableInternet,
+        enableInternet: this.enableInternet,
         containerId: this.ctx.id.toString(),
         className: this.constructor.name,
         outboundByHostOverrides: outboundConfiguration.outboundByHostOverrides,
@@ -1571,7 +1564,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
 
     const fetcher = ctx.exports.ContainerProxy({
       props: {
-        enableInternet: outboundConfiguration.enableInternet,
+        enableInternet: this.enableInternet,
         containerId: this.ctx.id.toString(),
         className: this.constructor.name,
         outboundByHostOverrides: outboundConfiguration.outboundByHostOverrides,
