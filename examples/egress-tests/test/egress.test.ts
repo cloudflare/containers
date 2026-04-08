@@ -39,6 +39,14 @@ describe('egress interception', () => {
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
 
+    async function denyHost(runner: WranglerDevRunner, id: string, hostname: string) {
+      const url = await runner.getUrl();
+      const res = await fetch(
+        `${url}/config/deny-host?id=${id}&hostname=${encodeURIComponent(hostname)}`
+      );
+      expect(res.status).toBe(200);
+    }
+
     test('deniedHosts blocks the request', async () => {
       const runner = new WranglerDevRunner();
       const id = randomUUID();
@@ -143,6 +151,23 @@ describe('egress interception', () => {
         // globtest.com itself does NOT match *.globtest.com
         const res = await proxyVia(runner, id, 'globtest.com');
         expect(res.status).toBe(520);
+      } finally {
+        await destroyEgress(runner, id);
+      }
+    });
+
+    test('denyHost also blocks the same hostname with a trailing dot', async () => {
+      const runner = new WranglerDevRunner();
+      const id = randomUUID();
+      const hostname = `allowed-${randomUUID()}.example.com`;
+
+      try {
+        await denyHost(runner, id, hostname);
+
+        const res = await proxyVia(runner, id, `${hostname}.`);
+        expect(res.status).toBe(520);
+        const body = await res.text();
+        expect(body).toContain('Origin is disallowed');
       } finally {
         await destroyEgress(runner, id);
       }

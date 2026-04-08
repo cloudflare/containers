@@ -222,6 +222,14 @@ function matchesHostList(hostname: string, patterns: string[]): boolean {
   return patterns.some(pattern => simpleGlobMatch(pattern, hostname));
 }
 
+function normalizeHostname(hostname: string): string {
+  let end = hostname.length;
+  while (end > 0 && hostname[end - 1] === '.') {
+    end--;
+  }
+  return hostname.slice(0, end);
+}
+
 // ===============================
 //     CONTAINER STATE WRAPPER
 // ===============================
@@ -312,6 +320,7 @@ type PersistedOutboundConfiguration = Pick<
 export class ContainerProxy extends WorkerEntrypoint<Cloudflare.Env, ContainerProxyOptions> {
   override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    const hostname = normalizeHostname(url.hostname);
     const {
       className,
       containerId,
@@ -325,14 +334,14 @@ export class ContainerProxy extends WorkerEntrypoint<Cloudflare.Env, ContainerPr
     const baseCtx = { containerId, className };
 
     // 1. deniedHosts: overrides everything, blocks unconditionally
-    if (deniedHosts && matchesHostList(url.hostname, deniedHosts)) {
+    if (deniedHosts && matchesHostList(hostname, deniedHosts)) {
       return new Response('Origin is disallowed', { status: 520 });
     }
 
     // 2. allowedHosts: when set, acts as a whitelist gate — only matching
     //    hosts can proceed. This gates everything below, including outboundByHost.
     //    outboundByHost only maps a handler for a hostname, it does not allow it.
-    if (allowedHosts && !matchesHostList(url.hostname, allowedHosts)) {
+    if (allowedHosts && !matchesHostList(hostname, allowedHosts)) {
       return new Response('Origin is disallowed', { status: 520 });
     }
 
@@ -340,9 +349,9 @@ export class ContainerProxy extends WorkerEntrypoint<Cloudflare.Env, ContainerPr
     const handlers = outboundHandlersRegistry.get(className);
     if (outboundByHostOverrides && handlers) {
       const override =
-        outboundByHostOverrides[url.hostname] ??
+        outboundByHostOverrides[hostname] ??
         Object.entries(outboundByHostOverrides).find(
-          ([pattern]) => pattern !== url.hostname && simpleGlobMatch(pattern, url.hostname)
+          ([pattern]) => pattern !== hostname && simpleGlobMatch(pattern, hostname)
         )?.[1];
       if (override && handlers[override.method]) {
         return handlers[override.method](request, this.env, {
@@ -356,9 +365,9 @@ export class ContainerProxy extends WorkerEntrypoint<Cloudflare.Env, ContainerPr
     const handlersByHost = outboundByHostRegistry.get(className);
     if (handlersByHost) {
       const handler =
-        handlersByHost[url.hostname] ??
+        handlersByHost[hostname] ??
         Object.entries(handlersByHost).find(
-          ([pattern]) => pattern !== url.hostname && simpleGlobMatch(pattern, url.hostname)
+          ([pattern]) => pattern !== hostname && simpleGlobMatch(pattern, hostname)
         )?.[1];
       if (handler) {
         return handler(request, this.env, baseCtx);

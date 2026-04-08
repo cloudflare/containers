@@ -52,6 +52,15 @@ export default {
       if (url.pathname === '/proxy_https') {
         return await container.containerFetch(request);
       }
+      if (url.pathname === '/config/deny-host') {
+        const hostname = url.searchParams.get('hostname');
+        if (!hostname) {
+          return new Response('hostname is required', { status: 400 });
+        }
+
+        await container.denyHost(hostname);
+        return new Response('OK');
+      }
       if (url.pathname === '/destroy') {
         await container.destroy();
         return new Response('Container killed');
