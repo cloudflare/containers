@@ -7,6 +7,14 @@ export class MyContainer extends Container {
   defaultPort = 8080; // The default port for the container to listen on
   sleepAfter = '10s'; // Sleep the container if no requests are made in this timeframe
   enableInternet = false;
+  interceptHttps = true;
+  entrypoint = [
+    'sh',
+    '-lc',
+    'cp /etc/cloudflare/certs/cloudflare-containers-ca.crt /usr/local/share/ca-certificates/cloudflare-containers-ca.crt && update-ca-certificates && exec /server',
+  ];
+  allowedHosts = ['example.com', '*.google.com'];
+  deniedHosts = ['example2.com'];
 
   // default env vars to set in the container when starting
   envVars = {
@@ -14,6 +22,9 @@ export class MyContainer extends Container {
   };
 
   static outboundByHost = {
+    '*.google.com': (_req: Request, _env: unknown, ctx: OutboundHandlerContext) => {
+      return new Response('Hi, ' + ctx.containerId + ' I am google');
+    },
     'google.com': (_req: Request, _env: unknown, ctx: OutboundHandlerContext) => {
       return new Response('Hi, ' + ctx.containerId + ' I am google');
     },
@@ -35,14 +46,13 @@ export default {
     request: Request,
     env: { MY_CONTAINER: DurableObjectNamespace<MyContainer> }
   ): Promise<Response> {
-    if (!request.url.includes('proxy=')) {
-      return new Response('?proxy= param should be set to point to a domain');
+    if (!request.url.includes('proxy=') && !request.url.includes('proxy_https=')) {
+      return new Response('?proxy= or ?proxy_https= param should be set to point to a domain');
     }
 
     // getContainer will return a specific instance if no second argument is provided
     const container = getContainer(env.MY_CONTAINER, 'hello3');
 
-    await container.setOutboundByHost('github.com', 'github', { hello: 'world' });
     return await container.fetch(request);
   },
 };

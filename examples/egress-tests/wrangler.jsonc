@@ -1,6 +1,5 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "egress-workers",
+  "name": "egress-tests",
   "main": "src/index.ts",
   "compatibility_date": "2026-02-06",
   "compatibility_flags": ["nodejs_compat", "experimental"],
@@ -9,24 +8,24 @@
   },
   "containers": [
     {
-      "class_name": "MyContainer",
       "image": "./Dockerfile",
-      "max_instances": 3,
-      "name": "egress-workers"
+      "class_name": "EgressTestContainer",
+      "name": "egress-test-container",
+      "max_instances": 2,
     },
   ],
   "durable_objects": {
     "bindings": [
       {
-        "class_name": "MyContainer",
-        "name": "MY_CONTAINER",
+        "class_name": "EgressTestContainer",
+        "name": "CONTAINER",
       },
     ],
   },
   "migrations": [
     {
-      "new_sqlite_classes": ["MyContainer"],
       "tag": "v1",
+      "new_sqlite_classes": ["EgressTestContainer"],
     },
   ],
 }

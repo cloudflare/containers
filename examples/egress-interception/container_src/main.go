@@ -36,6 +36,26 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if p := r.URL.Query().Get("proxy_https"); p != "" {
+		res, err := http.Get("https://" + p)
+		if err != nil {
+			w.WriteHeader(520)
+			io.WriteString(w, "error connecting to proxy_https: "+err.Error())
+			return
+		}
+
+		w.WriteHeader(res.StatusCode)
+		body, err := io.ReadAll(res.Body)
+		if err != nil {
+			w.WriteHeader(520)
+			io.WriteString(w, "error reading proxy_https response: "+err.Error())
+			return
+		}
+
+		w.Write(body)
+		return
+	}
+
 	fmt.Fprintf(w, "Hi, I'm a container and this is my message: %s, and my deployment ID is: %s", message, deploymentId)
 }
 

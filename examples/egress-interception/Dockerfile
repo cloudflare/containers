@@ -3,7 +3,8 @@ WORKDIR /src
 COPY container_src/main.go ./main.go
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /server ./main.go
 
-FROM scratch
+FROM alpine:latest
+RUN apk add --no-cache ca-certificates
 COPY --from=builder /server /server
 EXPOSE 8080
 CMD ["/server"]
