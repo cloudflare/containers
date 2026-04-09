@@ -259,20 +259,23 @@ The request is blocked (HTTP 520).
 
 ## Interception strategy
 
-The library avoids intercepting all outbound traffic when it is not necessary.
+The library avoids intercepting all outbound traffic when it is not necessary,
+but only keeps the per-host optimization for the narrow static case.
 
-- **Catch-all interception** (`interceptAllOutboundHttp`) is only used when a
-  catch-all `outbound` handler or a runtime `setOutboundHandler` override is
-  configured. All outbound HTTP goes through `ContainerProxy`.
-- **Per-host interception** (`interceptOutboundHttp`) is used in all other
-  cases. Only traffic to known hosts (from `outboundByHost`, `allowedHosts`,
-  `deniedHosts`, and runtime overrides) is routed through `ContainerProxy`.
-  Everything else follows the container's default network behaviour
-  (`enableInternet`).
+- **Intercept-all mode** (`interceptAllOutboundHttp`) is used whenever the
+  container needs to evaluate all hosts, including catch-all `outbound`, a
+  runtime `setOutboundHandler` override, any `allowedHosts` / `deniedHosts`
+  configuration, or runtime-mutated outbound config such as
+  `setOutboundByHost()`.
+- **Per-host interception** (`interceptOutboundHttp`) is only used for static
+  `outboundByHost` rules when there is no catch-all handler and no allow/deny
+  configuration. Only those known static hosts are routed through
+  `ContainerProxy`; everything else follows the container's default network
+  behaviour (`enableInternet`).
 
 When `interceptHttps` is `true`:
 
-- In catch-all mode, `interceptOutboundHttps('*', ...)` intercepts all HTTPS.
+- In intercept-all mode, `interceptOutboundHttps('*', ...)` intercepts all HTTPS.
 - In per-host mode, `interceptOutboundHttps(host, ...)` is called for each
   known host individually.
 
