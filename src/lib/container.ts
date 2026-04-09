@@ -375,7 +375,7 @@ export class ContainerProxy extends WorkerEntrypoint<Cloudflare.Env, ContainerPr
     // No catch-all or enableInternet fallback applies — if no handler
     // matched above, the host was intercepted for allow/deny only.
     if (!interceptAll) {
-      if (allowedHosts) {
+      if (allowedHosts || enableInternet) {
         return fetch(request);
       }
 
