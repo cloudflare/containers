@@ -1,5 +1,11 @@
 # @cloudflare/containers
 
+## 0.3.0
+
+### Minor Changes
+
+- 9b32add: Opt in to interceptOutboundHttps when interceptHttps = true
+
 ## 0.2.4
 
 ### Patch Changes
