@@ -1,5 +1,11 @@
 # @cloudflare/containers
 
+## 0.3.1
+
+### Patch Changes
+
+- 0c06874: Remove debug `console.log(props)` statement from `ContainerProxy` initialization
+
 ## 0.3.0
 
 ### Minor Changes
@@ -76,6 +82,7 @@
 ### Patch Changes
 
 - e4879c8: Miscellaneous minor fixes and improvements to starting containers and port checking.
+
   - When calling `startAndWaitForPorts`, check for port-readiness even if the container is started.
   - Add `waitForPort()` method.
   - Add options to configure timeout and polling interval to `start`, similar to what `cancellationOptions` on `startAndWaitForPorts`. `start` does not check for port readiness but still polls for available and starting container.
