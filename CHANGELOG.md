@@ -1,11 +1,5 @@
 # @cloudflare/containers
 
-## 0.3.1
-
-### Patch Changes
-
-- Remove debug `console.log(props)` statement from `ContainerProxy` initialization
-
 ## 0.3.0
 
 ### Minor Changes
