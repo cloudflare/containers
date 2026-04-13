@@ -1560,7 +1560,6 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       props,
     });
 
-    console.log(props);
     if (interceptAll) {
       // If we previously installed static per-host interceptors, refresh them
       // with the current fetcher so they follow the latest config too.
