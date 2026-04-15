@@ -1,5 +1,11 @@
 # @cloudflare/containers
 
+## 0.3.2
+
+### Patch Changes
+
+- e8895f1: Preserve response headers when proxying WebSocket upgrades through `Container.fetch()`.
+
 ## 0.3.1
 
 ### Patch Changes
