@@ -1255,7 +1255,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
           server.close(1011, 'Container WebSocket error');
         });
 
-        return new Response(null, { status: 101, webSocket: client });
+        return new Response(null, { status: res.status, webSocket: client, headers: res.headers });
       }
 
       if (res.body !== null) {
