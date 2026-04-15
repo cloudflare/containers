@@ -13,10 +13,6 @@ export class WebSocketTestContainer extends Container {
     MESSAGE: 'websocket default message',
   };
   entrypoint = ['node', 'server.js'];
-
-  onStop() {
-    console.log('stopped!');
-  }
 }
 
 export default {
@@ -58,7 +54,6 @@ export default {
     }
 
     if (url.pathname === '/fetch/ws') {
-      console.log('Handling WebSocket fetch request');
       const wsRequest = new Request('http://example/ws', {
         method: request.method,
         headers: request.headers,

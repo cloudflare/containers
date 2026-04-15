@@ -15,11 +15,17 @@ describe('WebSocket proxy functionality', () => {
       const ws = new WebSocket(wsUrl);
 
       const messages: string[] = [];
+      let handshakeHeader: string | undefined;
 
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {
           reject(new Error('WebSocket connection timeout'));
         }, 10000);
+
+        ws.on('upgrade', response => {
+          const header = response.headers['x-container-ws-header'];
+          handshakeHeader = Array.isArray(header) ? header[0] : header;
+        });
 
         ws.on('open', () => {
           clearTimeout(timeout);
@@ -46,6 +52,7 @@ describe('WebSocket proxy functionality', () => {
 
       // Verify we received the welcome message and echo
       expect(messages).toHaveLength(2);
+      expect(handshakeHeader).toBe('preserved');
       expect(messages[0]).toContain('WebSocket connected to container');
       expect(messages[1]).toContain('Echo from container: Hello from test');
 
