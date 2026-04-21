@@ -12,6 +12,12 @@
       "name": "test-container",
       "max_instances": 2,
     },
+    {
+      "image": "./Dockerfile",
+      "class_name": "ReadyOnContainer",
+      "name": "ready-on-container",
+      "max_instances": 2,
+    },
   ],
   "durable_objects": {
     "bindings": [
@@ -19,12 +25,20 @@
         "class_name": "TestContainer",
         "name": "CONTAINER",
       },
+      {
+        "class_name": "ReadyOnContainer",
+        "name": "READY_ON_CONTAINER",
+      },
     ],
   },
   "migrations": [
     {
       "tag": "v1",
       "new_sqlite_classes": ["TestContainer"],
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["ReadyOnContainer"],
     },
   ],
 }

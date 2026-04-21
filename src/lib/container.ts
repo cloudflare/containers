@@ -126,6 +126,119 @@ const signalToNumbers: Record<Signal, SignalInteger> = {
   SIGKILL: 9,
 };
 
+/**
+ * Options passed into a ReadinessCheck when it's invoked.
+ */
+export interface ReadinessCheckOptions {
+  /** Optional abort signal to cancel the check */
+  signal?: AbortSignal;
+}
+
+/**
+ * A readiness check is a function that returns a promise.
+ * The Container will wait for every declared readiness check to resolve
+ * before allowing fetch requests to be proxied to the container.
+ *
+ * Checks receive the container instance (so helpers like `portResponding`
+ * can poll the right TCP port) and an options bag with an optional abort
+ * signal so long-running checks can cooperatively abort.
+ *
+ * **Do not reject on "not ready yet" — retry instead.** Rejection is
+ * treated as a terminal failure: the whole readiness gate rejects and
+ * the parent `fetch` / `containerFetch` returns a 500. If the condition
+ * you're checking is transiently false (e.g. upstream isn't up, file
+ * isn't written yet), loop inside the check with a small sleep until
+ * either the condition is met or `options.signal` fires. The signal
+ * fires when the overall readiness timeout (`portReadyTimeoutMS`)
+ * elapses, so looping cooperatively is bounded. Only reject when
+ * something is genuinely broken or the signal aborted.
+ */
+export type ReadinessCheck = (
+  // Using a minimal structural type here avoids generic friction when a
+  // `Container<SomeEnv>` subclass passes `this` to a check expecting the
+  // unparameterized Container.
+  container: Container<any>,
+  options?: ReadinessCheckOptions
+) => Promise<unknown>;
+
+/**
+ * Options accepted by the `portResponding` and `isHealthy` readiness
+ * check factories.
+ */
+export interface ReadinessCheckFactoryOptions {
+  /**
+   * Port to check. Defaults to the container's `defaultPort` when
+   * omitted. If neither is set, the check rejects.
+   */
+  port?: number;
+  /**
+   * Override the Host header used for the request. Defaults to the host
+   * portion of the container's `pingEndpoint` (e.g. `container` when
+   * `pingEndpoint = 'container/health'`).
+   */
+  pingEndpoint?: string;
+}
+
+/**
+ * Readiness check that waits for the given port to start accepting HTTP
+ * connections. Any HTTP response (including 4xx) counts as "responding" —
+ * the goal is to confirm the process has bound the port.
+ *
+ * @example
+ * class MyApp extends Container {
+ *   readyOn = [portResponding(8080)];
+ * }
+ *
+ * @example
+ * // Override the Host header used by the probe:
+ * portResponding(8080, { pingEndpoint: 'container/ping' });
+ */
+export function portResponding(
+  port: number,
+  options: { pingEndpoint?: string } = {}
+): ReadinessCheck {
+  return (container, runOptions) =>
+    container.waitForPort({
+      portToCheck: port,
+      pingEndpoint: options.pingEndpoint,
+      signal: runOptions?.signal,
+    });
+}
+
+/**
+ * Readiness check that polls an HTTP path until it returns a 2xx response.
+ * Useful for apps that expose a `/health` or `/ready` endpoint.
+ *
+ * @example
+ * class MyApp extends Container {
+ *   defaultPort = 8080;
+ *   readyOn = [isHealthy('/health')];
+ * }
+ *
+ * @example
+ * // Target a specific port and override the Host header:
+ * isHealthy('/health', { port: 8081, pingEndpoint: 'container' });
+ */
+export function isHealthy(
+  path: string,
+  options: ReadinessCheckFactoryOptions = {}
+): ReadinessCheck {
+  return (container, runOptions) => {
+    const targetPort = options.port ?? container.defaultPort;
+    if (targetPort === undefined) {
+      return Promise.reject(
+        new Error(`isHealthy('${path}'): no port specified and no defaultPort set on the container`)
+      );
+    }
+    return container.waitForPath({
+      path,
+      portToCheck: targetPort,
+      pingEndpoint: options.pingEndpoint,
+      signal: runOptions?.signal,
+    });
+  };
+}
+
 // =====================
 // =====================
 //   HELPER FUNCTIONS
@@ -173,6 +286,16 @@ function getExitCodeFromError(error: unknown): number | null {
   }
 
   return null;
+}
+
+/**
+ * Split a `pingEndpoint` value (e.g. `'container/health'`) into its host
+ * portion. Everything before the first `/` is the host; if no `/` is
+ * present, the whole string is the host.
+ */
+function parsePingEndpointHost(pingEndpoint: string): string {
+  const slashIndex = pingEndpoint.indexOf('/');
+  return slashIndex === -1 ? pingEndpoint : pingEndpoint.slice(0, slashIndex);
 }
 
 /**
@@ -508,6 +631,39 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   // but it's still useful if you want to control the path that
   // the Container class uses to send HTTP requests to.
   pingEndpoint: string = 'ping';
+
+  /**
+   * Readiness checks that must all resolve before fetch requests are
+   * allowed through to the container.
+   *
+   * `portResponding` checks for `defaultPort` and every `requiredPorts`
+   * entry are added automatically — you don't need to list them here.
+   *
+   * @example
+   * class MyApp extends Container {
+   *   defaultPort = 8080;
+   *   // portResponding(8080) is added automatically
+   *   readyOn = [isHealthy('/health')];
+   * }
+   *
+   * @example
+   * class MyApp extends Container {
+   *   requiredPorts = [8080, 8081];
+   *   // portResponding(8080) and portResponding(8081) are added automatically
+   *   readyOn = [isHealthy('/health', { port: 8080 })];
+   * }
+   *
+   * Use `addReadinessCheck(...)` to add a check at runtime, or
+   * `setReadinessChecks([...])` to take full control (auto port checks
+   * are NOT added when `setReadinessChecks` is used — include them
+   * explicitly if you need them). Pass `setReadinessChecks([])` to opt
+   * out entirely.
+   *
+   * Checks run in parallel, so ordering does not matter. If any check
+   * rejects, the container is not considered ready.
+   */
+  readyOn?: ReadinessCheck[];
+
   applyOutboundInterceptionPromise: Promise<void> = Promise.resolve();
 
   usingInterception = false;
@@ -796,15 +952,23 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   }
 
   /**
-   * Start the container and wait for ports to be available.
+   * Start the container and wait for it to become ready.
    *
-   * For each specified port, it polls until the port is available or `cancellationOptions.portReadyTimeoutMS` is reached.
+   * Readiness is determined by the container's `readyOn` list. If
+   * `readyOn` is undefined, a default list derived from `defaultPort` /
+   * `requiredPorts` is used — equivalent to the historical "wait for
+   * ports" behaviour.
    *
-   * @param ports - The ports to wait for (if undefined, uses requiredPorts or defaultPort)
-   * @param cancellationOptions - Options to configure timeouts, polling intereva, and abort signal
-   * @param startOptions Override configuration on a per-instance basis for env vars, entrypoint command, internet access, and labels
-   * @returns A promise that resolves when the container has been started and the ports are listening
-   * @throws Error if port checks fail after the specified timeout or if the container fails to start.
+   * All readiness checks run in parallel. The method resolves once every
+   * check resolves, or rejects on the first failure.
+   *
+   * @param ports - If provided, overrides `readyOn` and waits for just
+   *   these ports (useful for ad-hoc ports not declared on the class)
+   * @param cancellationOptions - Timeouts, polling interval, and abort
+   * @param startOptions - Override env vars, entrypoint, internet access, and labels on a per-instance basis
+   * @returns Resolves when the container is running and ready
+   * @throws If the container fails to start, any readiness check fails,
+   *   or the timeout is exceeded
    */
   public async startAndWaitForPorts(args: StartAndWaitForPortsOptions): Promise<void>;
   public async startAndWaitForPorts(
@@ -838,52 +1002,111 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       resolvedStartOptions = startOptions;
     }
 
-    // Determine which ports to check
-    const portsToCheck = await this.getPortsToCheck(ports);
-
     // trigger all onStop that we didn't do yet
     await this.syncPendingStoppedEvents();
 
-    // Prepare to start the container
     resolvedCancellationOptions ??= {};
     const containerGetTimeout =
       resolvedCancellationOptions.instanceGetTimeoutMS ?? TIMEOUT_TO_GET_CONTAINER_MS;
     const pollInterval = resolvedCancellationOptions.waitInterval ?? INSTANCE_POLL_INTERVAL_MS;
-    let containerGetRetries = Math.ceil(containerGetTimeout / pollInterval);
+    const containerGetRetries = Math.ceil(containerGetTimeout / pollInterval);
+
+    // Explicit ports override the configured readiness checks; otherwise
+    // use `readyOn` (or the default derived from defaultPort/requiredPorts).
+    const readinessChecks =
+      ports !== undefined
+        ? (Array.isArray(ports) ? ports : [ports]).map(p => portResponding(p))
+        : this.getReadinessChecks();
+
+    // The initial port probe (during startContainerIfNotRunning) needs a
+    // concrete port — use an explicit one, the first required port, the
+    // default port, or a fallback. This is just to verify the container
+    // process is reachable; readiness checks run after.
+    const probePort = this.getProbePort(ports);
 
     const waitOptions: WaitOptions = {
       signal: resolvedCancellationOptions.abort,
       retries: containerGetRetries,
       waitInterval: pollInterval,
-      portToCheck: portsToCheck[0],
+      portToCheck: probePort,
     };
 
-    // Start the container if it's not running
-    const triesUsed = await this.startContainerIfNotRunning(waitOptions, resolvedStartOptions);
+    // Start the container if it's not running. The return value is the
+    // number of poll iterations used during start.
+    const startTriesUsed = await this.startContainerIfNotRunning(waitOptions, resolvedStartOptions);
 
-    // Check each port
-
-    const totalPortReadyTries = Math.ceil(
-      (resolvedCancellationOptions.portReadyTimeoutMS ?? TIMEOUT_TO_GET_PORTS_MS) / pollInterval
-    );
-    let triesLeft = totalPortReadyTries - triesUsed;
-
-    for (const port of portsToCheck) {
-      triesLeft = await this.waitForPort({
-        signal: resolvedCancellationOptions.abort,
-        waitInterval: pollInterval,
-        retries: triesLeft,
-        portToCheck: port,
-      });
-    }
+    // Readiness shares the `portReadyTimeoutMS` budget with startup —
+    // time spent waiting for the container to come up is subtracted from
+    // the remaining budget. If start consumed the whole budget, readiness
+    // gets 0ms and will reject immediately.
+    const portReadyTimeoutMs =
+      resolvedCancellationOptions.portReadyTimeoutMS ?? TIMEOUT_TO_GET_PORTS_MS;
+    const remainingReadyBudgetMs = Math.max(0, portReadyTimeoutMs - startTriesUsed * pollInterval);
+    await this.runReadinessChecks(readinessChecks, {
+      signal: resolvedCancellationOptions.abort,
+      timeoutMs: remainingReadyBudgetMs,
+    });
 
     this.setupMonitorCallbacks();
 
     await this.ctx.blockConcurrencyWhile(async () => {
-      // All ports are ready
+      // All readiness checks passed
       await this.state.setHealthy();
       await this.onStart();
     });
+  }
+
+  /**
+   * Append a readiness check to `readyOn`.
+   *
+   * Automatic `portResponding` checks for `defaultPort` / `requiredPorts`
+   * are preserved — this adds to them rather than replacing. Use
+   * `setReadinessChecks` if you need full control.
+   *
+   * @example
+   * // defaultPort = 8080, no readyOn declared on the class.
+   * // Effective checks after this call:
+   * //   [portResponding(8080), isHealthy('/ready')]
+   * container.addReadinessCheck(isHealthy('/ready'));
+   *
+   * @example
+   * // Add a one-off warmup check:
+   * container.addReadinessCheck(async () => {
+   *   await warmCachesFromR2();
+   * });
+   */
+  public addReadinessCheck(check: ReadinessCheck): void {
+    if (this.readyOn === undefined) {
+      this.readyOn = [];
+    }
+    this.readyOn.push(check);
+  }
+
+  /**
+   * Replace the readiness check list with the provided one.
+   *
+   * Unlike `readyOn` and `addReadinessCheck`, this takes full control:
+   * automatic `portResponding` checks for `defaultPort` / `requiredPorts`
+   * are NOT added. If you want port checks, include them explicitly.
+   *
+   * Pass an empty array to opt out of readiness checking entirely — the
+   * container is considered ready as soon as it starts.
+   *
+   * @example
+   * // Replace everything, including any auto port checks:
+   * container.setReadinessChecks([
+   *   portResponding(8080),
+   *   isHealthy('/ready'),
+   *   async () => { await migrateDatabase(); },
+   * ]);
+   *
+   * @example
+   * // Opt out — ready immediately once the process starts:
+   * container.setReadinessChecks([]);
+   */
+  public setReadinessChecks(checks: ReadinessCheck[]): void {
+    this.readyOn = [...checks];
+    this.readinessChecksReplaced = true;
   }
 
   /**
@@ -897,57 +1120,117 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    * - `abort`: Optional AbortSignal to cancel waiting
    * - `retries`: Number of retries before giving up (default: TRIES_TO_GET_PORTS)
    * - `waitInterval`: Interval between retries in milliseconds (default: INSTANCE_POLL_INTERVAL_MS)
+   * - `pingEndpoint`: Override the endpoint used for the probe request. Defaults to `this.pingEndpoint`.
    */
-  public async waitForPort(waitOptions: WaitOptions): Promise<number> {
-    const port = waitOptions.portToCheck;
-    const tcpPort = this.container.getTcpPort(port);
+  public async waitForPort(waitOptions: WaitOptions & { pingEndpoint?: string }): Promise<number> {
+    const endpoint = waitOptions.pingEndpoint ?? this.pingEndpoint;
+    return this.pollUntilReady(waitOptions, `Port ${waitOptions.portToCheck}`, async signal => {
+      // Any HTTP response counts as "port is listening" — we don't
+      // care about status or body. Using the full pingEndpoint as the
+      // URL host preserves the documented "container/health" format.
+      await this.container
+        .getTcpPort(waitOptions.portToCheck)
+        .fetch(`http://${endpoint}`, { signal });
+    });
+  }
+
+  /**
+   * Polls an HTTP path on the container until it returns a 2xx response,
+   * or the retry budget is exhausted.
+   *
+   * The Host header defaults to the host portion of `this.pingEndpoint`
+   * (e.g. `container` for the default `'ping'`-style config, or
+   * whatever's set when `pingEndpoint` is `'container/health'`). Pass
+   * `pingEndpoint` in the options to override for this call only.
+   *
+   * Returns the number of tries used, or throws if the path never
+   * returned a healthy response.
+   */
+  public async waitForPath(
+    waitOptions: WaitOptions & { path: string; pingEndpoint?: string }
+  ): Promise<number> {
+    const { portToCheck: port, path, pingEndpoint } = waitOptions;
+    const host = parsePingEndpointHost(pingEndpoint ?? this.pingEndpoint);
+    const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+
+    return this.pollUntilReady(
+      waitOptions,
+      `Path ${normalizedPath} on port ${port}`,
+      async signal => {
+        const response = await this.container
+          .getTcpPort(port)
+          .fetch(`http://${host}${normalizedPath}`, { signal });
+
+        // Free the response body regardless of status so we don't leak
+        // it during polling.
+        try {
+          await response.body?.cancel();
+        } catch {}
+
+        if (!response.ok) {
+          throw new Error(`status ${response.status}`);
+        }
+      }
+    );
+  }
+
+  /**
+   * Shared polling loop used by `waitForPort` and `waitForPath`.
+   *
+   * Calls `probe` once per iteration with a signal that aborts if the
+   * outer caller aborts or if the per-attempt `PING_TIMEOUT_MS` ticks
+   * first. Between iterations we sleep for `waitInterval` or exit early
+   * if the outer signal aborts.
+   *
+   * Returns the configured retry count on success (preserving the
+   * existing `waitForPort` contract). Throws the last error if the
+   * container has exited or the retry budget is exhausted.
+   */
+  private async pollUntilReady(
+    waitOptions: WaitOptions,
+    label: string,
+    probe: (signal: AbortSignal) => Promise<void>
+  ): Promise<number> {
+    const pollInterval = waitOptions.waitInterval ?? INSTANCE_POLL_INTERVAL_MS;
+    const tries = waitOptions.retries ?? Math.ceil(TIMEOUT_TO_GET_PORTS_MS / pollInterval);
     const abortedSignal = new Promise(res => {
       waitOptions.signal?.addEventListener('abort', () => {
         res(true);
       });
     });
-    const pollInterval = waitOptions.waitInterval ?? INSTANCE_POLL_INTERVAL_MS;
-    let tries = waitOptions.retries ?? Math.ceil(TIMEOUT_TO_GET_PORTS_MS / pollInterval);
 
-    // Try to connect to the port multiple times
     for (let i = 0; i < tries; i++) {
       try {
         const combinedSignal = addTimeoutSignal(waitOptions.signal, PING_TIMEOUT_MS);
-        await tcpPort.fetch(`http://${this.pingEndpoint}`, { signal: combinedSignal });
-
-        // Successfully connected to this port
-        console.log(`Port ${port} is ready`);
-        break;
+        await probe(combinedSignal);
+        console.log(`${label} is ready`);
+        return tries;
       } catch (e) {
-        // Check for specific error messages that indicate we should keep retrying
         const errorMessage = e instanceof Error ? e.message : String(e);
+        console.debug(`Error checking ${label}: ${errorMessage}`);
 
-        console.debug(`Error checking ${port}: ${errorMessage}`);
-
-        // If not running, it means the container crashed
+        // If the container process died, don't keep polling — something
+        // went wrong during startup.
         if (!this.container.running) {
           try {
             await this.onError(
               new Error(
-                `Container crashed while checking for ports, did you start the container and setup the entrypoint correctly?`
+                `Container crashed while checking ${label}, did you start the container and setup the entrypoint correctly?`
               )
             );
           } catch {}
-
           throw e;
         }
 
-        // If we're on the last attempt and the port is still not ready, fail
         if (i === tries - 1) {
           try {
             await this.onError(
-              `Failed to verify port ${port} is available after ${(i + 1) * pollInterval}ms, last error: ${errorMessage}`
+              `Failed to verify ${label} is ready after ${(i + 1) * pollInterval}ms, last error: ${errorMessage}`
             );
           } catch {}
           throw e;
         }
 
-        // Wait a bit before trying again
         await Promise.any([
           new Promise(resolve => setTimeout(resolve, pollInterval)),
           abortedSignal,
@@ -1344,6 +1627,11 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   private outboundByHostOverrides: OutboundByHostOverrides = {};
   private outboundHandlerOverride?: OutboundHandlerOverride;
 
+  // Set to true once `setReadinessChecks` has been called. Signals that
+  // the user wants full control — auto `portResponding` checks for
+  // `defaultPort` / `requiredPorts` are no longer added on top.
+  private readinessChecksReplaced = false;
+
   // Only set when the user calls setAllowedHosts/setDeniedHosts at runtime
   private allowedHostsOverride?: string[];
   private deniedHostsOverride?: string[];
@@ -1646,28 +1934,110 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   }
 
   /**
-   *
-   * The method prioritizes port sources in this order:
-   * 1. Ports specified directly in the method call
-   * 2. `requiredPorts` class property (if set)
-   * 3. `defaultPort` (if neither of the above is specified)
-   * 4. Falls back to port 33 if none of the above are set
+   * Returns a port to use for the initial "is the container reachable"
+   * probe in `startContainerIfNotRunning`. This is distinct from the
+   * readiness check list — it only confirms the container process is
+   * listening somewhere so we can set `state = running`. Readiness checks
+   * run after this probe succeeds.
    */
-  private async getPortsToCheck(overridePorts?: number | number[]) {
-    let portsToCheck: number[] = [];
-
+  private getProbePort(overridePorts?: number | number[]): number {
     if (overridePorts !== undefined) {
-      // Use explicitly provided ports (single port or array)
-      portsToCheck = Array.isArray(overridePorts) ? overridePorts : [overridePorts];
-    } else if (this.requiredPorts && this.requiredPorts.length > 0) {
-      // Use requiredPorts class property if available
-      portsToCheck = [...this.requiredPorts];
-    } else {
-      // Fall back to defaultPort if available
-      portsToCheck = [this.defaultPort ?? FALLBACK_PORT_TO_CHECK];
+      return Array.isArray(overridePorts) ? overridePorts[0] : overridePorts;
     }
 
-    return portsToCheck;
+    if (this.requiredPorts && this.requiredPorts.length > 0) {
+      return this.requiredPorts[0];
+    }
+
+    return this.defaultPort ?? FALLBACK_PORT_TO_CHECK;
+  }
+
+  /**
+   * Build the `portResponding` checks implied by `defaultPort` /
+   * `requiredPorts`. These are automatically merged into the effective
+   * readiness list unless the user has explicitly called
+   * `setReadinessChecks`.
+   *
+   * `requiredPorts` takes precedence over `defaultPort` to match the
+   * existing probe semantics.
+   */
+  private getAutoPortChecks(): ReadinessCheck[] {
+    if (this.requiredPorts && this.requiredPorts.length > 0) {
+      return this.requiredPorts.map(port => portResponding(port));
+    }
+    if (this.defaultPort !== undefined) {
+      return [portResponding(this.defaultPort)];
+    }
+    return [];
+  }
+
+  /**
+   * Resolve the active readiness check list.
+   *
+   * - If `setReadinessChecks` has been called, the user's list is
+   *   returned as-is (full override, no auto port checks).
+   * - Otherwise, the effective list is `[...autoPortChecks, ...readyOn]`
+   *   so port checks from `defaultPort` / `requiredPorts` are always
+   *   included alongside user-declared checks.
+   */
+  private getReadinessChecks(): ReadinessCheck[] {
+    if (this.readinessChecksReplaced) {
+      return this.readyOn ?? [];
+    }
+    return [...this.getAutoPortChecks(), ...(this.readyOn ?? [])];
+  }
+
+  /**
+   * Run every readiness check in parallel and resolve when they all
+   * succeed. Rejects on the first failure or when the timeout fires.
+   *
+   * There are two complementary cancellation mechanisms:
+   *
+   * 1. **Cooperative abort**: every check receives an `AbortSignal` that
+   *    aborts when the caller aborts or when `timeoutMs` elapses. The
+   *    built-in helpers (`portResponding`, `isHealthy`) listen to this
+   *    signal via `waitForPort` / `waitForPath`, so they stop polling
+   *    and reject promptly.
+   *
+   * 2. **Hard timeout**: the method also races `Promise.all` against a
+   *    timeout promise that rejects after `timeoutMs`. This guarantees
+   *    `startAndWaitForPorts` returns on time even if a user-defined
+   *    check ignores the abort signal. Orphaned check promises may keep
+   *    executing in the background until they finish on their own —
+   *    user-defined checks that do long work should honour
+   *    `options.signal` to avoid leaking resources.
+   */
+  private async runReadinessChecks(
+    checks: ReadinessCheck[],
+    options: { signal?: AbortSignal; timeoutMs?: number } = {}
+  ): Promise<void> {
+    if (checks.length === 0) {
+      return;
+    }
+
+    const { timeoutMs } = options;
+    const signal =
+      timeoutMs !== undefined ? addTimeoutSignal(options.signal, timeoutMs) : options.signal;
+
+    const allChecks = Promise.all(checks.map(check => check(this, { signal })));
+
+    if (timeoutMs === undefined) {
+      await allChecks;
+      return;
+    }
+
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const timeoutReject = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => {
+        reject(new Error(`Readiness checks did not complete within ${timeoutMs}ms`));
+      }, timeoutMs);
+    });
+
+    try {
+      await Promise.race([allChecks, timeoutReject]);
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+    }
   }
 
   // ===========================================
