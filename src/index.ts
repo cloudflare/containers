@@ -2,7 +2,7 @@ export {
   Container,
   ContainerProxy,
   outboundParams,
-  pathHealthy,
+  isHealthy,
   portResponding,
 } from './lib/container';
 export type {

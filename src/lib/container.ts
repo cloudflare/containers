@@ -179,17 +179,15 @@ export function portResponding(port: number): ReadinessCheck {
  * @example
  * class MyApp extends Container {
  *   defaultPort = 8080;
- *   readyOn = [pathHealthy('/health')];
+ *   readyOn = [isHealthy('/health')];
  * }
  */
-export function pathHealthy(path: string, port?: number): ReadinessCheck {
+export function isHealthy(path: string, port?: number): ReadinessCheck {
   return (container, options) => {
     const targetPort = port ?? container.defaultPort;
     if (targetPort === undefined) {
       return Promise.reject(
-        new Error(
-          `pathHealthy('${path}'): no port specified and no defaultPort set on the container`
-        )
+        new Error(`isHealthy('${path}'): no port specified and no defaultPort set on the container`)
       );
     }
     return container.waitForPath({ path, portToCheck: targetPort, signal: options?.signal });
@@ -485,21 +483,28 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    * Readiness checks that must all resolve before fetch requests are
    * allowed through to the container.
    *
-   * Declare in the class body:
+   * `portResponding` checks for `defaultPort` and every `requiredPorts`
+   * entry are added automatically — you don't need to list them here.
    *
    * @example
    * class MyApp extends Container {
    *   defaultPort = 8080;
-   *   readyOn = [
-   *     portResponding(8080),
-   *     pathHealthy('/health'),
-   *   ];
+   *   // portResponding(8080) is added automatically
+   *   readyOn = [isHealthy('/health')];
    * }
    *
-   * If left undefined, a default list is built from `defaultPort` /
-   * `requiredPorts` — equivalent to waiting for those ports to respond
-   * (the historical behaviour). Call `setReadinessChecks([])` to opt out
-   * of the default, or `addReadinessCheck(...)` to append to it.
+   * @example
+   * class MyApp extends Container {
+   *   requiredPorts = [8080, 8081];
+   *   // portResponding(8080) and portResponding(8081) are added automatically
+   *   readyOn = [isHealthy('/health', 8080)];
+   * }
+   *
+   * Use `addReadinessCheck(...)` to add a check at runtime, or
+   * `setReadinessChecks([...])` to take full control (auto port checks
+   * are NOT added when `setReadinessChecks` is used — include them
+   * explicitly if you need them). Pass `setReadinessChecks([])` to opt
+   * out entirely.
    *
    * Checks run in parallel, so ordering does not matter. If any check
    * rejects, the container is not considered ready.
@@ -811,24 +816,56 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   }
 
   /**
-   * Append a readiness check. If `readyOn` was not set, this materializes
-   * the default list (built from `defaultPort` / `requiredPorts`) so that
-   * subsequent reads observe both the defaults and the newly added check.
+   * Append a readiness check to `readyOn`.
+   *
+   * Automatic `portResponding` checks for `defaultPort` / `requiredPorts`
+   * are preserved — this adds to them rather than replacing. Use
+   * `setReadinessChecks` if you need full control.
+   *
+   * @example
+   * // defaultPort = 8080, no readyOn declared on the class.
+   * // Effective checks after this call:
+   * //   [portResponding(8080), isHealthy('/ready')]
+   * container.addReadinessCheck(isHealthy('/ready'));
+   *
+   * @example
+   * // Add a one-off warmup check:
+   * container.addReadinessCheck(async () => {
+   *   await warmCachesFromR2();
+   * });
    */
   public addReadinessCheck(check: ReadinessCheck): void {
     if (this.readyOn === undefined) {
-      this.readyOn = this.getDefaultReadinessChecks();
+      this.readyOn = [];
     }
     this.readyOn.push(check);
   }
 
   /**
-   * Replace the readiness check list with the provided one. Passing an
-   * empty array opts out of readiness checking entirely (the container
-   * will be considered ready as soon as it starts).
+   * Replace the readiness check list with the provided one.
+   *
+   * Unlike `readyOn` and `addReadinessCheck`, this takes full control:
+   * automatic `portResponding` checks for `defaultPort` / `requiredPorts`
+   * are NOT added. If you want port checks, include them explicitly.
+   *
+   * Pass an empty array to opt out of readiness checking entirely — the
+   * container is considered ready as soon as it starts.
+   *
+   * @example
+   * // Replace everything, including any auto port checks:
+   * container.setReadinessChecks([
+   *   portResponding(8080),
+   *   isHealthy('/ready'),
+   *   async () => { await migrateDatabase(); },
+   * ]);
+   *
+   * @example
+   * // Opt out — ready immediately once the process starts:
+   * container.setReadinessChecks([]);
    */
   public setReadinessChecks(checks: ReadinessCheck[]): void {
     this.readyOn = [...checks];
+    this.readinessChecksReplaced = true;
   }
 
   /**
@@ -1366,6 +1403,11 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   private outboundByHostOverrides: OutboundByHostOverrides = {};
   private outboundHandlerOverride?: OutboundHandlerOverride;
 
+  // Set to true once `setReadinessChecks` has been called. Signals that
+  // the user wants full control — auto `portResponding` checks for
+  // `defaultPort` / `requiredPorts` are no longer added on top.
+  private readinessChecksReplaced = false;
+
   // ==========================
   //     GENERAL HELPERS
   // ==========================
@@ -1554,11 +1596,15 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   }
 
   /**
-   * Build the default readiness check list from `defaultPort` /
-   * `requiredPorts`. This mirrors the historical "wait for ports"
-   * behaviour and is used whenever `readyOn` is undefined.
+   * Build the `portResponding` checks implied by `defaultPort` /
+   * `requiredPorts`. These are automatically merged into the effective
+   * readiness list unless the user has explicitly called
+   * `setReadinessChecks`.
+   *
+   * `requiredPorts` takes precedence over `defaultPort` to match the
+   * existing probe semantics.
    */
-  private getDefaultReadinessChecks(): ReadinessCheck[] {
+  private getAutoPortChecks(): ReadinessCheck[] {
     if (this.requiredPorts && this.requiredPorts.length > 0) {
       return this.requiredPorts.map(port => portResponding(port));
     }
@@ -1569,11 +1615,19 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   }
 
   /**
-   * Resolve the active readiness check list: the user's `readyOn` if
-   * set, otherwise the defaults derived from `defaultPort` / `requiredPorts`.
+   * Resolve the active readiness check list.
+   *
+   * - If `setReadinessChecks` has been called, the user's list is
+   *   returned as-is (full override, no auto port checks).
+   * - Otherwise, the effective list is `[...autoPortChecks, ...readyOn]`
+   *   so port checks from `defaultPort` / `requiredPorts` are always
+   *   included alongside user-declared checks.
    */
   private getReadinessChecks(): ReadinessCheck[] {
-    return this.readyOn ?? this.getDefaultReadinessChecks();
+    if (this.readinessChecksReplaced) {
+      return this.readyOn ?? [];
+    }
+    return [...this.getAutoPortChecks(), ...(this.readyOn ?? [])];
   }
 
   /**

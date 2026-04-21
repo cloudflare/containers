@@ -1,4 +1,4 @@
-import { Container, pathHealthy, portResponding } from '../../../src/lib/container';
+import { Container, isHealthy } from '../../../src/lib/container';
 import { getContainer, switchPort } from '../../../src/lib/utils';
 
 /**
@@ -37,12 +37,15 @@ export class TestContainer extends Container {
 /**
  * Container with a `readyOn` list to exercise readiness checks. The
  * container's /health endpoint only starts returning 2xx after
- * HEALTHY_AFTER_MS has elapsed, so `pathHealthy` must poll.
+ * HEALTHY_AFTER_MS has elapsed, so `isHealthy` must poll.
+ *
+ * Note: `portResponding(8080)` is added automatically because
+ * `defaultPort = 8080` — we only declare the path check here.
  */
 export class ReadyOnContainer extends Container {
   defaultPort = 8080;
   sleepAfter = '3m';
-  readyOn = [portResponding(8080), pathHealthy('/health')];
+  readyOn = [isHealthy('/health')];
 
   constructor(ctx: any, env: any) {
     super(ctx, env);

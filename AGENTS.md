@@ -65,20 +65,46 @@ Build output goes to `dist/`. Do not edit files in `dist/`.
 
 **Readiness checks:**
 
-Readiness checks gate fetch proxying — every check must resolve before requests flow to the container. Declare on the class via `readyOn`, or add at runtime with `addReadinessCheck` / `setReadinessChecks`. All checks run in parallel.
+Readiness checks gate fetch proxying — every check must resolve before requests flow to the container. All checks run in parallel, so ordering doesn't matter.
+
+`portResponding` checks for `defaultPort` and every entry in `requiredPorts` are added automatically, so you don't need to list them explicitly:
 
 ```ts
+import { Container, isHealthy } from '@cloudflare/containers';
+
 class MyApp extends Container {
   defaultPort = 8080;
-  readyOn = [
-    portResponding(8080),
-    pathHealthy('/health'),
-    myCustomCheck,
-  ];
+  // portResponding(8080) is added automatically
+  readyOn = [isHealthy('/health')];
 }
 ```
 
-When `readyOn` is undefined, a default list is built from `defaultPort` / `requiredPorts`. Call `setReadinessChecks([])` to opt out entirely.
+Add checks at runtime with `addReadinessCheck` — auto port checks are still applied:
+
+```ts
+// Effective: [portResponding(8080), isHealthy('/ready')]
+container.addReadinessCheck(isHealthy('/ready'));
+
+container.addReadinessCheck(async () => {
+  await warmCachesFromR2();
+});
+```
+
+`setReadinessChecks` takes full control: auto port checks are NOT added, so include them explicitly if you need them. Pass `[]` to opt out entirely.
+
+```ts
+import { portResponding, isHealthy } from '@cloudflare/containers';
+
+// Replace everything — include port checks explicitly
+container.setReadinessChecks([
+  portResponding(8080),
+  isHealthy('/ready'),
+  async () => { await migrateDatabase(); },
+]);
+
+// Opt out — ready as soon as the process starts
+container.setReadinessChecks([]);
+```
 
 **HTTP methods:**
 
