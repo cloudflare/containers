@@ -24,6 +24,7 @@ const NO_CONTAINER_INSTANCE_ERROR =
 const RUNTIME_SIGNALLED_ERROR = 'runtime signalled the container to exit:';
 const UNEXPECTED_EXIT_ERROR = 'container exited with unexpected exit code:';
 const NOT_LISTENING_ERROR = 'the container is not listening';
+const STOPPING_CONTAINER_FAILED_ERROR = 'stopping container failed';
 const CONTAINER_STATE_KEY = '__CF_CONTAINER_STATE';
 const OUTBOUND_CONFIGURATION_KEY = 'OUTBOUND_CONFIGURATION';
 
@@ -146,6 +147,23 @@ const isRuntimeSignalledError = (error: unknown): boolean =>
 const isNotListeningError = (error: unknown): boolean => isErrorOfType(error, NOT_LISTENING_ERROR);
 const isContainerExitNonZeroError = (error: unknown): boolean =>
   isErrorOfType(error, UNEXPECTED_EXIT_ERROR);
+const isContainerNotRunningError = (error: unknown): boolean => {
+  const patterns = [
+    'the container is not running',
+    'not expected to be running',
+    'consider calling start()',
+  ];
+  return patterns.some(pattern => isErrorOfType(error, pattern));
+};
+const isContainerCrashedDuringPortCheckError = (error: unknown): boolean =>
+  isErrorOfType(error, 'container crashed while checking for ports');
+const isStoppingContainerFailedError = (error: unknown): boolean =>
+  isErrorOfType(error, STOPPING_CONTAINER_FAILED_ERROR);
+const isRecoverableContainerUnavailableError = (error: unknown): boolean =>
+  isContainerNotRunningError(error) ||
+  isNotListeningError(error) ||
+  isContainerCrashedDuringPortCheckError(error) ||
+  isStoppingContainerFailedError(error);
 
 function getExitCodeFromError(error: unknown): number | null {
   if (!(error instanceof Error)) {
@@ -967,7 +985,13 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    */
   public async stop(signal: Signal | SignalInteger = 'SIGTERM'): Promise<void> {
     if (this.container.running) {
-      this.container.signal(typeof signal === 'string' ? signalToNumbers[signal] : signal);
+      try {
+        this.container.signal(typeof signal === 'string' ? signalToNumbers[signal] : signal);
+      } catch (error) {
+        if (!isRecoverableContainerUnavailableError(error)) {
+          throw error;
+        }
+      }
     }
 
     await this.syncPendingStoppedEvents();
@@ -1159,7 +1183,10 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     const state = await this.state.getState();
     if (!this.container.running || state.status !== 'healthy') {
       try {
-        await this.startAndWaitForPorts(port, { abort: request.signal });
+        await this.startAndWaitForPortsWithRecovery(port, {
+          abort: request.signal,
+          context: 'startup',
+        });
       } catch (e) {
         if (isNoInstanceError(e)) {
           return new Response(
@@ -1274,6 +1301,29 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
 
       if (!(e instanceof Error)) {
         throw e;
+      }
+
+      // If container stopped or is no longer reachable during the request, restart and retry
+      if (!this.container.running || isRecoverableContainerUnavailableError(e)) {
+        try {
+          await this.startAndWaitForPortsWithRecovery(port, {
+            context: 'proxy',
+            initialError: e,
+          });
+          const retryTcpPort = this.container.getTcpPort(port);
+          return await retryTcpPort.fetch(containerUrl, request);
+        } catch (retryError) {
+          if (isNoInstanceError(retryError)) {
+            return new Response(
+              'There is no Container instance available at this time.\nThis is likely because you have reached your max concurrent instance count (set in wrangler config) or are you currently provisioning the Container.\nIf you are deploying your Container for the first time, check your dashboard to see provisioning status, this may take a few minutes.',
+              { status: 503 }
+            );
+          }
+          return new Response(
+            `Failed to restart container: ${retryError instanceof Error ? retryError.message : String(retryError)}`,
+            { status: 500 }
+          );
+        }
       }
 
       // This error means that the container might've just restarted
@@ -1643,6 +1693,56 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     return { request, port };
   }
 
+  private async startAndWaitForPortsWithRecovery(
+    port: number,
+    options: {
+      context: 'startup' | 'proxy';
+      abort?: AbortSignal;
+      initialError?: Error;
+    }
+  ): Promise<void> {
+    if (options.initialError) {
+      console.debug(
+        `Recoverable ${options.context} error for container ${this.ctx.id}, restarting and retrying: ${options.initialError.message}`
+      );
+    }
+
+    const attempts: (CancellationOptions | undefined)[] = [
+      options.abort ? { abort: options.abort } : undefined,
+      undefined,
+      undefined,
+    ];
+
+    let lastError: unknown;
+
+    for (let index = 0; index < attempts.length; index++) {
+      const cancellationOptions = attempts[index];
+
+      try {
+        if (cancellationOptions) {
+          await this.startAndWaitForPorts(port, cancellationOptions);
+        } else {
+          await this.startAndWaitForPorts(port);
+        }
+        return;
+      } catch (error) {
+        lastError = error;
+
+        if (!isRecoverableContainerUnavailableError(error) || index === attempts.length - 1) {
+          throw error;
+        }
+
+        console.debug(
+          `Recoverable ${options.context} start error for container ${this.ctx.id}, retry ${index + 1}/${attempts.length - 1}: ${error instanceof Error ? error.message : String(error)}`
+        );
+
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+
+    throw lastError;
+  }
+
   /**
    *
    * The method prioritizes port sources in this order:
@@ -1949,7 +2049,17 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     }
 
     if (this.isActivityExpired()) {
-      await this.onActivityExpired();
+      try {
+        await this.onActivityExpired();
+      } catch (error) {
+        if (!isRecoverableContainerUnavailableError(error)) {
+          throw error;
+        }
+
+        console.debug(
+          `Recoverable activity-expiration error for container ${this.ctx.id}: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
       // renewActivityTimeout makes sure we don't spam calls here
       this.renewActivityTimeout();
       return;
