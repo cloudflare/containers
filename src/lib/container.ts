@@ -173,8 +173,11 @@ export function portResponding(port: number): ReadinessCheck {
  * Readiness check that polls an HTTP path until it returns a 2xx response.
  * Useful for apps that expose a `/health` or `/ready` endpoint.
  *
- * If `port` is omitted, the container's `defaultPort` is used. If neither
- * is set, the check throws when it runs.
+ * - `port` defaults to the container's `defaultPort`. If neither is set,
+ *   the check rejects when it runs.
+ * - `pingEndpoint` overrides the Host header used for the request. By
+ *   default the container's `pingEndpoint` host is used (e.g. `container`
+ *   when `pingEndpoint = 'container/health'`).
  *
  * @example
  * class MyApp extends Container {
@@ -182,7 +185,7 @@ export function portResponding(port: number): ReadinessCheck {
  *   readyOn = [isHealthy('/health')];
  * }
  */
-export function isHealthy(path: string, port?: number): ReadinessCheck {
+export function isHealthy(path: string, port?: number, pingEndpoint?: string): ReadinessCheck {
   return (container, options) => {
     const targetPort = port ?? container.defaultPort;
     if (targetPort === undefined) {
@@ -190,7 +193,12 @@ export function isHealthy(path: string, port?: number): ReadinessCheck {
         new Error(`isHealthy('${path}'): no port specified and no defaultPort set on the container`)
       );
     }
-    return container.waitForPath({ path, portToCheck: targetPort, signal: options?.signal });
+    return container.waitForPath({
+      path,
+      portToCheck: targetPort,
+      pingEndpoint,
+      signal: options?.signal,
+    });
   };
 }
 
@@ -241,6 +249,16 @@ function getExitCodeFromError(error: unknown): number | null {
   }
 
   return null;
+}
+
+/**
+ * Split a `pingEndpoint` value (e.g. `'container/health'`) into its host
+ * portion. Everything before the first `/` is the host; if no `/` is
+ * present, the whole string is the host.
+ */
+function parsePingEndpointHost(pingEndpoint: string): string {
+  const slashIndex = pingEndpoint.indexOf('/');
+  return slashIndex === -1 ? pingEndpoint : pingEndpoint.slice(0, slashIndex);
 }
 
 /**
@@ -786,7 +804,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     // concrete port — use an explicit one, the first required port, the
     // default port, or a fallback. This is just to verify the container
     // process is reachable; readiness checks run after.
-    const probePort = await this.getProbePort(ports);
+    const probePort = this.getProbePort(ports);
 
     const waitOptions: WaitOptions = {
       signal: resolvedCancellationOptions.abort,
@@ -795,15 +813,20 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       portToCheck: probePort,
     };
 
-    // Start the container if it's not running
-    await this.startContainerIfNotRunning(waitOptions, resolvedStartOptions);
+    // Start the container if it's not running. The return value is the
+    // number of poll iterations used during start.
+    const startTriesUsed = await this.startContainerIfNotRunning(waitOptions, resolvedStartOptions);
 
-    // Run readiness checks in parallel, bounded by portReadyTimeoutMS
-    const readyTimeoutMs =
+    // Readiness shares the `portReadyTimeoutMS` budget with startup —
+    // time spent waiting for the container to come up is subtracted from
+    // the remaining budget. If start consumed the whole budget, readiness
+    // gets 0ms and will reject immediately.
+    const portReadyTimeoutMs =
       resolvedCancellationOptions.portReadyTimeoutMS ?? TIMEOUT_TO_GET_PORTS_MS;
+    const remainingReadyBudgetMs = Math.max(0, portReadyTimeoutMs - startTriesUsed * pollInterval);
     await this.runReadinessChecks(readinessChecks, {
       signal: resolvedCancellationOptions.abort,
-      timeoutMs: readyTimeoutMs,
+      timeoutMs: remainingReadyBudgetMs,
     });
 
     this.setupMonitorCallbacks();
@@ -881,127 +904,108 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    * - `waitInterval`: Interval between retries in milliseconds (default: INSTANCE_POLL_INTERVAL_MS)
    */
   public async waitForPort(waitOptions: WaitOptions): Promise<number> {
-    const port = waitOptions.portToCheck;
-    const tcpPort = this.container.getTcpPort(port);
-    const abortedSignal = new Promise(res => {
-      waitOptions.signal?.addEventListener('abort', () => {
-        res(true);
-      });
+    return this.pollUntilReady(waitOptions, `Port ${waitOptions.portToCheck}`, async signal => {
+      // Any HTTP response counts as "port is listening" — we don't
+      // care about status or body. Using the full pingEndpoint as the
+      // URL host preserves the documented "container/health" format.
+      await this.container
+        .getTcpPort(waitOptions.portToCheck)
+        .fetch(`http://${this.pingEndpoint}`, { signal });
     });
-    const pollInterval = waitOptions.waitInterval ?? INSTANCE_POLL_INTERVAL_MS;
-    let tries = waitOptions.retries ?? Math.ceil(TIMEOUT_TO_GET_PORTS_MS / pollInterval);
-
-    // Try to connect to the port multiple times
-    for (let i = 0; i < tries; i++) {
-      try {
-        const combinedSignal = addTimeoutSignal(waitOptions.signal, PING_TIMEOUT_MS);
-        await tcpPort.fetch(`http://${this.pingEndpoint}`, { signal: combinedSignal });
-
-        // Successfully connected to this port
-        console.log(`Port ${port} is ready`);
-        break;
-      } catch (e) {
-        // Check for specific error messages that indicate we should keep retrying
-        const errorMessage = e instanceof Error ? e.message : String(e);
-
-        console.debug(`Error checking ${port}: ${errorMessage}`);
-
-        // If not running, it means the container crashed
-        if (!this.container.running) {
-          try {
-            await this.onError(
-              new Error(
-                `Container crashed while checking for ports, did you start the container and setup the entrypoint correctly?`
-              )
-            );
-          } catch {}
-
-          throw e;
-        }
-
-        // If we're on the last attempt and the port is still not ready, fail
-        if (i === tries - 1) {
-          try {
-            await this.onError(
-              `Failed to verify port ${port} is available after ${(i + 1) * pollInterval}ms, last error: ${errorMessage}`
-            );
-          } catch {}
-          throw e;
-        }
-
-        // Wait a bit before trying again
-        await Promise.any([
-          new Promise(resolve => setTimeout(resolve, pollInterval)),
-          abortedSignal,
-        ]);
-        if (waitOptions.signal?.aborted) {
-          throw new Error('Container request aborted.');
-        }
-      }
-    }
-    return tries;
   }
 
   /**
    * Polls an HTTP path on the container until it returns a 2xx response,
    * or the retry budget is exhausted.
    *
+   * The Host header defaults to the host portion of `this.pingEndpoint`
+   * (e.g. `container` for the default `'ping'`-style config, or
+   * whatever's set when `pingEndpoint` is `'container/health'`). Pass
+   * `pingEndpoint` in the options to override for this call only.
+   *
    * Returns the number of tries used, or throws if the path never
    * returned a healthy response.
    */
-  public async waitForPath(waitOptions: WaitOptions & { path: string }): Promise<number> {
-    const { portToCheck: port, path } = waitOptions;
-    const tcpPort = this.container.getTcpPort(port);
+  public async waitForPath(
+    waitOptions: WaitOptions & { path: string; pingEndpoint?: string }
+  ): Promise<number> {
+    const { portToCheck: port, path, pingEndpoint } = waitOptions;
+    const host = parsePingEndpointHost(pingEndpoint ?? this.pingEndpoint);
+    const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+
+    return this.pollUntilReady(
+      waitOptions,
+      `Path ${normalizedPath} on port ${port}`,
+      async signal => {
+        const response = await this.container
+          .getTcpPort(port)
+          .fetch(`http://${host}${normalizedPath}`, { signal });
+
+        // Free the response body regardless of status so we don't leak
+        // it during polling.
+        try {
+          await response.body?.cancel();
+        } catch {}
+
+        if (!response.ok) {
+          throw new Error(`status ${response.status}`);
+        }
+      }
+    );
+  }
+
+  /**
+   * Shared polling loop used by `waitForPort` and `waitForPath`.
+   *
+   * Calls `probe` once per iteration with a signal that aborts if the
+   * outer caller aborts or if the per-attempt `PING_TIMEOUT_MS` ticks
+   * first. Between iterations we sleep for `waitInterval` or exit early
+   * if the outer signal aborts.
+   *
+   * Returns the configured retry count on success (preserving the
+   * existing `waitForPort` contract). Throws the last error if the
+   * container has exited or the retry budget is exhausted.
+   */
+  private async pollUntilReady(
+    waitOptions: WaitOptions,
+    label: string,
+    probe: (signal: AbortSignal) => Promise<void>
+  ): Promise<number> {
+    const pollInterval = waitOptions.waitInterval ?? INSTANCE_POLL_INTERVAL_MS;
+    const tries = waitOptions.retries ?? Math.ceil(TIMEOUT_TO_GET_PORTS_MS / pollInterval);
     const abortedSignal = new Promise(res => {
       waitOptions.signal?.addEventListener('abort', () => {
         res(true);
       });
     });
-    const pollInterval = waitOptions.waitInterval ?? INSTANCE_POLL_INTERVAL_MS;
-    const tries = waitOptions.retries ?? Math.ceil(TIMEOUT_TO_GET_PORTS_MS / pollInterval);
-    const normalizedPath = path.startsWith('/') ? path : `/${path}`;
 
     for (let i = 0; i < tries; i++) {
       try {
         const combinedSignal = addTimeoutSignal(waitOptions.signal, PING_TIMEOUT_MS);
-        const response = await tcpPort.fetch(`http://container${normalizedPath}`, {
-          signal: combinedSignal,
-        });
-
-        // Free response body regardless of status
-        try {
-          await response.body?.cancel();
-        } catch {}
-
-        if (response.ok) {
-          console.log(`Path ${normalizedPath} on port ${port} is healthy`);
-          return i;
-        }
-
-        throw new Error(
-          `path ${normalizedPath} on port ${port} returned status ${response.status}`
-        );
+        await probe(combinedSignal);
+        console.log(`${label} is ready`);
+        return tries;
       } catch (e) {
         const errorMessage = e instanceof Error ? e.message : String(e);
+        console.debug(`Error checking ${label}: ${errorMessage}`);
 
-        console.debug(`Error checking ${normalizedPath} on ${port}: ${errorMessage}`);
-
+        // If the container process died, don't keep polling — something
+        // went wrong during startup.
         if (!this.container.running) {
           try {
             await this.onError(
               new Error(
-                `Container crashed while checking ${normalizedPath} on port ${port}, did you start the container and setup the entrypoint correctly?`
+                `Container crashed while checking ${label}, did you start the container and setup the entrypoint correctly?`
               )
             );
           } catch {}
-
           throw e;
         }
 
         if (i === tries - 1) {
           try {
             await this.onError(
-              `Failed to verify ${normalizedPath} on port ${port} is healthy after ${(i + 1) * pollInterval}ms, last error: ${errorMessage}`
+              `Failed to verify ${label} is ready after ${(i + 1) * pollInterval}ms, last error: ${errorMessage}`
             );
           } catch {}
           throw e;
@@ -1583,7 +1587,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    * listening somewhere so we can set `state = running`. Readiness checks
    * run after this probe succeeds.
    */
-  private async getProbePort(overridePorts?: number | number[]): Promise<number> {
+  private getProbePort(overridePorts?: number | number[]): number {
     if (overridePorts !== undefined) {
       return Array.isArray(overridePorts) ? overridePorts[0] : overridePorts;
     }
@@ -1632,7 +1636,23 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
 
   /**
    * Run every readiness check in parallel and resolve when they all
-   * succeed. Rejects on the first failure (or timeout).
+   * succeed. Rejects on the first failure or when the timeout fires.
+   *
+   * There are two complementary cancellation mechanisms:
+   *
+   * 1. **Cooperative abort**: every check receives an `AbortSignal` that
+   *    aborts when the caller aborts or when `timeoutMs` elapses. The
+   *    built-in helpers (`portResponding`, `isHealthy`) listen to this
+   *    signal via `waitForPort` / `waitForPath`, so they stop polling
+   *    and reject promptly.
+   *
+   * 2. **Hard timeout**: the method also races `Promise.all` against a
+   *    timeout promise that rejects after `timeoutMs`. This guarantees
+   *    `startAndWaitForPorts` returns on time even if a user-defined
+   *    check ignores the abort signal. Orphaned check promises may keep
+   *    executing in the background until they finish on their own —
+   *    user-defined checks that do long work should honour
+   *    `options.signal` to avoid leaking resources.
    */
   private async runReadinessChecks(
     checks: ReadinessCheck[],
@@ -1642,12 +1662,29 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       return;
     }
 
+    const { timeoutMs } = options;
     const signal =
-      options.timeoutMs !== undefined
-        ? addTimeoutSignal(options.signal, options.timeoutMs)
-        : options.signal;
+      timeoutMs !== undefined ? addTimeoutSignal(options.signal, timeoutMs) : options.signal;
 
-    await Promise.all(checks.map(check => check(this, { signal })));
+    const allChecks = Promise.all(checks.map(check => check(this, { signal })));
+
+    if (timeoutMs === undefined) {
+      await allChecks;
+      return;
+    }
+
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const timeoutReject = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => {
+        reject(new Error(`Readiness checks did not complete within ${timeoutMs}ms`));
+      }, timeoutMs);
+    });
+
+    try {
+      await Promise.race([allChecks, timeoutReject]);
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+    }
   }
 
   // ===========================================

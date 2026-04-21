@@ -266,9 +266,9 @@ See [this example](#http-example-with-lifecycle-hooks).
 
   Polls a TCP port until it accepts an HTTP connection. Used by `portResponding`.
 
-- `waitForPath(options: WaitOptions & { path: string }): Promise<number>`
+- `waitForPath(options: WaitOptions & { path: string; pingEndpoint?: string }): Promise<number>`
 
-  Polls an HTTP path until it returns a 2xx response. Used by `isHealthy`.
+  Polls an HTTP path until it returns a 2xx response. Used by `isHealthy`. The Host header defaults to the host portion of the container's `pingEndpoint`; pass `pingEndpoint` in the options to override for this call only.
 
 ##### Outbound Interception
 
@@ -341,9 +341,9 @@ If nothing matches, the request goes out normally when `enableInternet` is `true
 
   Readiness check factory that waits for the given port to start accepting HTTP connections. See [Readiness Checks](#readiness-checks).
 
-- `isHealthy(path: string, port?: number): ReadinessCheck`
+- `isHealthy(path: string, port?: number, pingEndpoint?: string): ReadinessCheck`
 
-  Readiness check factory that polls an HTTP path until it returns 2xx. Falls back to `defaultPort` when `port` is omitted. See [Readiness Checks](#readiness-checks).
+  Readiness check factory that polls an HTTP path until it returns 2xx. Falls back to `defaultPort` when `port` is omitted; falls back to the host portion of the container's `pingEndpoint` when `pingEndpoint` is omitted. See [Readiness Checks](#readiness-checks).
 
 ## Examples
 
