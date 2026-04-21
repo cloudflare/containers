@@ -59,8 +59,26 @@ Build output goes to `dist/`. Do not edit files in `dist/`.
 **Starting a container:**
 
 - `start(startOptions?, waitOptions?)` — starts without waiting for ports
-- `startAndWaitForPorts(args)` — starts and polls until ports are ready
+- `startAndWaitForPorts(args)` — starts and runs all readiness checks (defaults to port checks)
 - `waitForPort(waitOptions)` — polls a single port; returns tries used
+- `waitForPath(waitOptions & { path })` — polls an HTTP path until it returns 2xx
+
+**Readiness checks:**
+
+Readiness checks gate fetch proxying — every check must resolve before requests flow to the container. Declare on the class via `readyOn`, or add at runtime with `addReadinessCheck` / `setReadinessChecks`. All checks run in parallel.
+
+```ts
+class MyApp extends Container {
+  defaultPort = 8080;
+  readyOn = [
+    portResponding(8080),
+    pathHealthy('/health'),
+    myCustomCheck,
+  ];
+}
+```
+
+When `readyOn` is undefined, a default list is built from `defaultPort` / `requiredPorts`. Call `setReadinessChecks([])` to opt out entirely.
 
 **HTTP methods:**
 

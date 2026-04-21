@@ -1,4 +1,4 @@
-import { Container } from '../../../src/lib/container';
+import { Container, pathHealthy, portResponding } from '../../../src/lib/container';
 import { getContainer, switchPort } from '../../../src/lib/utils';
 
 /**
@@ -34,10 +34,37 @@ export class TestContainer extends Container {
   }
 }
 
+/**
+ * Container with a `readyOn` list to exercise readiness checks. The
+ * container's /health endpoint only starts returning 2xx after
+ * HEALTHY_AFTER_MS has elapsed, so `pathHealthy` must poll.
+ */
+export class ReadyOnContainer extends Container {
+  defaultPort = 8080;
+  sleepAfter = '3m';
+  readyOn = [portResponding(8080), pathHealthy('/health')];
+
+  constructor(ctx: any, env: any) {
+    super(ctx, env);
+    this.envVars = {
+      MESSAGE: 'ready on container',
+      HEALTHY_AFTER_MS: '1500',
+    };
+    this.entrypoint = ['node', 'server.js'];
+  }
+
+  override async onStart(): Promise<void> {
+    console.log('readyOn onStart hook called');
+  }
+}
+
 export default {
   async fetch(
     request: Request,
-    env: { CONTAINER: DurableObjectNamespace<TestContainer> }
+    env: {
+      CONTAINER: DurableObjectNamespace<TestContainer>;
+      READY_ON_CONTAINER: DurableObjectNamespace<ReadyOnContainer>;
+    }
   ): Promise<Response> {
     const url = new URL(request.url);
     // get a new container instance per request
@@ -84,6 +111,20 @@ export default {
       await container.stop();
       return new Response('Container stopping');
     }
+
+    if (url.pathname === '/readyOn/fetch') {
+      const readyOn = getContainer(env.READY_ON_CONTAINER, id);
+      console.log('Handling readyOn http fetch request');
+      const response = await readyOn.fetch(request);
+      const body = await response.text();
+      return new Response(
+        JSON.stringify({
+          status: response.status,
+          body,
+        })
+      );
+    }
+
     return new Response('Not Found');
   },
 };
