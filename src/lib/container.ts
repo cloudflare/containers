@@ -143,8 +143,15 @@ export interface ReadinessCheckOptions {
  * can poll the right TCP port) and an options bag with an optional abort
  * signal so long-running checks can cooperatively abort.
  *
- * A check passes by resolving. It fails by rejecting — readiness will
- * then reject as a whole, which surfaces as a 500 from `containerFetch`.
+ * **Do not reject on "not ready yet" — retry instead.** Rejection is
+ * treated as a terminal failure: the whole readiness gate rejects and
+ * the parent `fetch` / `containerFetch` returns a 500. If the condition
+ * you're checking is transiently false (e.g. upstream isn't up, file
+ * isn't written yet), loop inside the check with a small sleep until
+ * either the condition is met or `options.signal` fires. The signal
+ * fires when the overall readiness timeout (`portReadyTimeoutMS`)
+ * elapses, so looping cooperatively is bounded. Only reject when
+ * something is genuinely broken or the signal aborted.
  */
 export type ReadinessCheck = (
   // Using a minimal structural type here avoids generic friction when a

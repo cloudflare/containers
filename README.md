@@ -473,28 +473,40 @@ The check receives two arguments:
 - **`container`** — the `Container` instance itself. Use it to call `waitForPath`, `waitForPort`, read instance config like `defaultPort`, or access `container.env` for bindings.
 - **`options.signal`** — an `AbortSignal` that fires if the caller aborts or the readiness timeout elapses. Long-running checks should honour it (pass it to `fetch`, `waitForPath`, etc.) so they cancel cleanly; checks that ignore it may keep running in the background after a timeout.
 
-Resolve to pass, reject to fail. Custom checks typically do one of three things: wait on an external dependency, run inline warmup, or poll the container's own HTTP surface (use `container.waitForPath` or `container.waitForPort` rather than `containerFetch`, which itself waits for readiness and would recurse).
+> **Don't reject on "not ready yet" — retry inside the check.** A rejection is terminal: the whole readiness gate rejects and the parent `fetch` / `containerFetch` returns a 500. If the condition you're waiting on is transient (upstream not up yet, file not written yet, etc.), loop with a short sleep until it's true or `options.signal` fires. The signal fires when the overall readiness timeout elapses, so cooperative loops are bounded. Only reject when something is genuinely broken or the signal aborted.
+
+Custom checks typically do one of three things: wait on an external dependency, run inline warmup, or poll the container's own HTTP surface (use `container.waitForPath` or `container.waitForPort` rather than `containerFetch`, which itself waits for readiness and would recurse).
 
 ```typescript
 import { Container, isHealthy, type ReadinessCheck } from '@cloudflare/containers';
 
-// Example 1: wait for an external dependency. The container isn't needed,
-// so we ignore it; `signal` is forwarded to fetch so the call aborts on
-// timeout.
+// Example 1: wait for an external dependency. The check loops until the
+// upstream returns 2xx OR the signal aborts — it does not reject on a
+// transient bad response.
 const upstreamReady: ReadinessCheck = async (_container, { signal } = {}) => {
-  const response = await fetch('https://api.example.com/ping', { signal });
-  if (!response.ok) throw new Error(`upstream not ready: ${response.status}`);
+  while (!signal?.aborted) {
+    try {
+      const response = await fetch('https://api.example.com/ping', { signal });
+      if (response.ok) return;
+    } catch {
+      // connection error — try again
+    }
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+  throw new Error('upstream did not become ready before readiness timed out');
 };
 
-// Example 2: poll a container endpoint. `container` is used to reach
-// waitForPath (which polls directly via the TCP port, bypassing the
-// readiness gate, so it's safe to call from inside a readiness check).
+// Example 2: poll a container endpoint. `container.waitForPath` already
+// retries internally until 2xx or the retry budget is exhausted, so this
+// check doesn't need its own loop. It rejects only if the endpoint never
+// becomes healthy within the budget — which is the correct behaviour.
 const modelsLoaded: ReadinessCheck = async (container, { signal } = {}) => {
   await container.waitForPath({ path: '/models', portToCheck: 8080, signal });
 };
 
-// Example 3: inline warmup. Neither argument is needed; the function
-// still returns a promise that must resolve for readiness to pass.
+// Example 3: inline warmup. This is one-shot work (not a condition to
+// poll) so rejecting on genuine failure is fine — the container really
+// isn't ready if warmup failed.
 const warmCaches: ReadinessCheck = async () => {
   await warmCachesFromR2();
 };

@@ -71,6 +71,8 @@ Build output goes to `dist/`. Do not edit files in `dist/`.
 
 Readiness checks gate fetch proxying — every check must resolve before requests flow to the container. All checks run in parallel, so ordering doesn't matter.
 
+Checks should retry internally on transient "not ready yet" conditions rather than rejecting. A rejection is terminal and causes the parent `fetch` to return a 500. Loop cooperatively against `options.signal` (which fires on timeout) and only reject when something is genuinely broken.
+
 `portResponding` checks for `defaultPort` and every entry in `requiredPorts` are added automatically, so you don't need to list them explicitly:
 
 ```ts
