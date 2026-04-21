@@ -487,6 +487,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   envVars: ContainerStartOptions['env'] = {};
   entrypoint: ContainerStartOptions['entrypoint'];
   enableInternet: ContainerStartOptions['enableInternet'] = true;
+  labels: ContainerStartOptions['labels'] = {};
 
   // When true, outbound HTTPS traffic from the container will be intercepted.
   // The container must trust /etc/cloudflare/certs/cloudflare-containers-ca.crt
@@ -758,10 +759,11 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    * await this.start({
    *   envVars: { DEBUG: 'true', NODE_ENV: 'development' },
    *   entrypoint: ['npm', 'run', 'dev'],
-   *   enableInternet: false
+   *   enableInternet: false,
+   *   labels: { tenant: 'acme', env: 'prod' },
    * });
    *
-   * @param startOptions - Override `envVars`, `entrypoint` and `enableInternet` on a per-instance basis
+   * @param startOptions - Override `envVars`, `entrypoint`, `enableInternet` and `labels` on a per-instance basis
    * @param waitOptions - Optional wait configuration with abort signal for cancellation. Default ~8s timeout.
    * @returns A promise that resolves when the container start command has been issued
    * @throws Error if no container context is available or if all start attempts fail
@@ -800,7 +802,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    *
    * @param ports - The ports to wait for (if undefined, uses requiredPorts or defaultPort)
    * @param cancellationOptions - Options to configure timeouts, polling intereva, and abort signal
-   * @param startOptions Override configuration on a per-instance basis for env vars, entrypoint command and internet access
+   * @param startOptions Override configuration on a per-instance basis for env vars, entrypoint command, internet access, and labels
    * @returns A promise that resolves when the container has been started and the ports are listening
    * @throws Error if port checks fail after the specified timeout or if the container fails to start.
    */
@@ -1702,6 +1704,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       const envVars = options?.envVars ?? this.envVars;
       const entrypoint = options?.entrypoint ?? this.entrypoint;
       const enableInternet = options?.enableInternet ?? this.enableInternet;
+      const labels = options?.labels ?? this.labels;
       // TODO: hopefully, enableInternet can be false in a future where we enable DNS
       // and TLS paths.
 
@@ -1712,6 +1715,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
 
       if (envVars && Object.keys(envVars).length > 0) startConfig.env = envVars;
       if (entrypoint) startConfig.entrypoint = entrypoint;
+      if (labels && Object.keys(labels).length > 0) startConfig.labels = labels;
 
       this.renewActivityTimeout();
       const handleError = async () => {

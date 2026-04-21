@@ -58,6 +58,8 @@ export interface ContainerStartConfigOptions {
   entrypoint?: string[];
   /** Whether to enable internet access for the container */
   enableInternet?: boolean;
+  /** Key-value metadata labels attached to the container for metrics/observability */
+  labels?: Record<string, string>;
 }
 
 export interface StartAndWaitForPortsOptions {
