@@ -9,6 +9,7 @@ A class for interacting with Containers on Cloudflare Workers.
 - Simple container lifecycle management (starting and stopping containers)
 - Event hooks for container lifecycle events (onStart, onStop, onError)
 - Configurable sleep timeout that renews on requests
+- Readiness checks that gate request proxying until the app is ready
 - Load balancing utilities
 
 ## Installation
@@ -66,6 +67,12 @@ The `Container` class that extends a container-enbled Durable Object to provide 
 - `requiredPorts?`
 
   Array of ports that should be checked for availability during container startup. Used by `startAndWaitForPorts` when no specific ports are provided.
+
+- `readyOn?: ReadinessCheck[]`
+
+  Readiness checks that must all resolve before fetch requests are proxied to the container. See [Readiness Checks](#readiness-checks) for details.
+
+  `portResponding` checks for `defaultPort` and every entry in `requiredPorts` are added automatically — you don't need to list them explicitly.
 
 - `sleepAfter`
 
@@ -247,6 +254,22 @@ See [this example](#http-example-with-lifecycle-hooks).
 
   Manually renews the container activity timeout (extends container lifetime).
 
+- `addReadinessCheck(check: ReadinessCheck)`
+
+  Appends a readiness check at runtime. Auto `portResponding` checks for `defaultPort` / `requiredPorts` are preserved.
+
+- `setReadinessChecks(checks: ReadinessCheck[])`
+
+  Replaces the readiness check list. Auto port checks are **not** added — include them explicitly if you need them. Pass `[]` to opt out entirely.
+
+- `waitForPort(options: WaitOptions): Promise<number>`
+
+  Polls a TCP port until it accepts an HTTP connection. Used by `portResponding`.
+
+- `waitForPath(options: WaitOptions & { path: string }): Promise<number>`
+
+  Polls an HTTP path until it returns a 2xx response. Used by `isHealthy`.
+
 ##### Outbound Interception
 
 Use outbound interception when you want to control what the container can reach, or proxy outbound requests through Worker code.
@@ -314,6 +337,14 @@ If nothing matches, the request goes out normally when `enableInternet` is `true
 
   If no name is provided, "cf-singleton-container" is used.
 
+- `portResponding(port: number): ReadinessCheck`
+
+  Readiness check factory that waits for the given port to start accepting HTTP connections. See [Readiness Checks](#readiness-checks).
+
+- `isHealthy(path: string, port?: number): ReadinessCheck`
+
+  Readiness check factory that polls an HTTP path until it returns 2xx. Falls back to `defaultPort` when `port` is omitted. See [Readiness Checks](#readiness-checks).
+
 ## Examples
 
 ### HTTP Example with Lifecycle Hooks
@@ -364,6 +395,89 @@ export class MyContainer extends Container {
 
   // Additional methods can be implemented as needed
 }
+```
+
+### Readiness Checks
+
+Readiness checks gate fetch proxying — every check must resolve before requests flow to the container. Use them to wait on health endpoints, warmup work, migrations, or anything else that has to finish before traffic is served.
+
+Checks run in parallel, so ordering doesn't matter. If any check rejects, the container is not considered ready and `fetch` / `containerFetch` returns a 500.
+
+**Auto port checks.** A `portResponding` check is added automatically for `defaultPort` and every entry in `requiredPorts`, so you don't need to list them in `readyOn`:
+
+```typescript
+import { Container, isHealthy } from '@cloudflare/containers';
+
+export class MyContainer extends Container {
+  defaultPort = 8080;
+
+  // portResponding(8080) is added automatically.
+  // Effective checks: [portResponding(8080), isHealthy('/health')]
+  readyOn = [isHealthy('/health')];
+}
+```
+
+**Custom readiness checks.** A readiness check is just `(container, options?) => Promise<unknown>`. Resolve to pass, reject to fail. The second argument carries an optional `AbortSignal` so long-running work can cooperatively abort.
+
+Custom checks typically do one of three things: wait on an external dependency, run inline warmup, or poll the container's own HTTP surface (use `container.waitForPath` or `container.waitForPort` rather than `containerFetch`, which itself waits for readiness and would recurse).
+
+```typescript
+import { Container, isHealthy, type ReadinessCheck } from '@cloudflare/containers';
+
+// Example 1: wait for an external dependency.
+const upstreamReady: ReadinessCheck = async (_container, { signal } = {}) => {
+  const response = await fetch('https://api.example.com/ping', { signal });
+  if (!response.ok) throw new Error(`upstream not ready: ${response.status}`);
+};
+
+// Example 2: poll a container endpoint and validate the response body.
+const modelsLoaded: ReadinessCheck = async (container, { signal } = {}) => {
+  // waitForPath polls directly via the TCP port, bypassing the
+  // readiness gate, so it's safe to call from inside a readiness check.
+  await container.waitForPath({ path: '/models', portToCheck: 8080, signal });
+};
+
+export class InferenceContainer extends Container {
+  defaultPort = 8080;
+
+  readyOn = [
+    isHealthy('/health'),
+    upstreamReady,
+    modelsLoaded,
+    // inline checks work too
+    async () => {
+      await warmCachesFromR2();
+    },
+  ];
+}
+```
+
+**Adding checks at runtime.** `addReadinessCheck` appends to the list. Auto port checks are preserved.
+
+```typescript
+// defaultPort = 8080, no `readyOn` declared on the class.
+// Effective after this call: [portResponding(8080), isHealthy('/ready')]
+container.addReadinessCheck(isHealthy('/ready'));
+
+container.addReadinessCheck(async () => {
+  await seedDatabase();
+});
+```
+
+**Replacing the list.** `setReadinessChecks` takes full control — auto port checks are **not** added, so include them explicitly if you want them. Pass `[]` to opt out of readiness checking entirely.
+
+```typescript
+import { portResponding, isHealthy } from '@cloudflare/containers';
+
+// Replace everything. Port checks are NOT auto-added.
+container.setReadinessChecks([
+  portResponding(8080),
+  isHealthy('/ready'),
+  async () => { await migrateDatabase(); },
+]);
+
+// Opt out — ready as soon as the process starts.
+container.setReadinessChecks([]);
 ```
 
 ### WebSocket Support
