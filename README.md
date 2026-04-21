@@ -459,38 +459,50 @@ export class MyContainer extends Container {
 }
 ```
 
-**Custom readiness checks.** A readiness check is just `(container, options?) => Promise<unknown>`. Resolve to pass, reject to fail. The second argument carries an optional `AbortSignal` so long-running work can cooperatively abort.
+**Custom readiness checks.** A readiness check is a function with this signature:
 
-Custom checks typically do one of three things: wait on an external dependency, run inline warmup, or poll the container's own HTTP surface (use `container.waitForPath` or `container.waitForPort` rather than `containerFetch`, which itself waits for readiness and would recurse).
+```typescript
+type ReadinessCheck = (
+  container: Container,
+  options?: { signal?: AbortSignal }
+) => Promise<unknown>;
+```
+
+The check receives two arguments:
+
+- **`container`** — the `Container` instance itself. Use it to call `waitForPath`, `waitForPort`, read instance config like `defaultPort`, or access `container.env` for bindings.
+- **`options.signal`** — an `AbortSignal` that fires if the caller aborts or the readiness timeout elapses. Long-running checks should honour it (pass it to `fetch`, `waitForPath`, etc.) so they cancel cleanly; checks that ignore it may keep running in the background after a timeout.
+
+Resolve to pass, reject to fail. Custom checks typically do one of three things: wait on an external dependency, run inline warmup, or poll the container's own HTTP surface (use `container.waitForPath` or `container.waitForPort` rather than `containerFetch`, which itself waits for readiness and would recurse).
 
 ```typescript
 import { Container, isHealthy, type ReadinessCheck } from '@cloudflare/containers';
 
-// Example 1: wait for an external dependency.
+// Example 1: wait for an external dependency. The container isn't needed,
+// so we ignore it; `signal` is forwarded to fetch so the call aborts on
+// timeout.
 const upstreamReady: ReadinessCheck = async (_container, { signal } = {}) => {
   const response = await fetch('https://api.example.com/ping', { signal });
   if (!response.ok) throw new Error(`upstream not ready: ${response.status}`);
 };
 
-// Example 2: poll a container endpoint and validate the response body.
+// Example 2: poll a container endpoint. `container` is used to reach
+// waitForPath (which polls directly via the TCP port, bypassing the
+// readiness gate, so it's safe to call from inside a readiness check).
 const modelsLoaded: ReadinessCheck = async (container, { signal } = {}) => {
-  // waitForPath polls directly via the TCP port, bypassing the
-  // readiness gate, so it's safe to call from inside a readiness check.
   await container.waitForPath({ path: '/models', portToCheck: 8080, signal });
+};
+
+// Example 3: inline warmup. Neither argument is needed; the function
+// still returns a promise that must resolve for readiness to pass.
+const warmCaches: ReadinessCheck = async () => {
+  await warmCachesFromR2();
 };
 
 export class InferenceContainer extends Container {
   defaultPort = 8080;
 
-  readyOn = [
-    isHealthy('/health'),
-    upstreamReady,
-    modelsLoaded,
-    // inline checks work too
-    async () => {
-      await warmCachesFromR2();
-    },
-  ];
+  readyOn = [isHealthy('/health'), upstreamReady, modelsLoaded, warmCaches];
 }
 ```
 
