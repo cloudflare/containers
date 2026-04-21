@@ -5,7 +5,8 @@ A class for interacting with Containers on Cloudflare Workers.
 ## Features
 
 - HTTP request proxying and WebSocket forwarding
-- Outbound request interception by host or catch-all handler
+- Outbound request interception by host or catch-all handler, with HTTPS support
+- Host allow/deny lists with glob pattern matching
 - Simple container lifecycle management (starting and stopping containers)
 - Event hooks for container lifecycle events (onStart, onStop, onError)
 - Configurable sleep timeout that renews on requests
@@ -95,6 +96,20 @@ The following properties are used to set defaults when starting the container, b
   Whether to enable internet access for the container.
 
   Defaults to `true`.
+
+- `interceptHttps: boolean`
+
+  When `true`, outbound HTTPS traffic is also intercepted through the same handler chain as HTTP. The container must trust the Cloudflare-provided CA certificate at `/etc/cloudflare/certs/cloudflare-containers-ca.crt`. See [Egress docs](docs/egress.md#intercepthttps) for setup instructions per distribution.
+
+  Defaults to `false`.
+
+- `allowedHosts: string[]`
+
+  A whitelist of hostname patterns. When non-empty, only matching hosts can proceed past the allow check; everything else is blocked (HTTP 520). Supports simple glob patterns where `*` matches any sequence of characters (e.g. `'*.example.com'`).
+
+- `deniedHosts: string[]`
+
+  A blocklist of hostname patterns. Matching hosts are blocked unconditionally (HTTP 520), overriding everything else in the handler chain including per-host handlers. Supports the same glob patterns as `allowedHosts`.
 
 - `pingEndpoint: string`
 
@@ -290,6 +305,30 @@ Use outbound interception when you want to control what the container can reach,
 
   Sets the catch-all outbound handler to a named handler from `static outboundHandlers`.
 
+- `setAllowedHosts(hosts: string[]): Promise<void>`
+
+  Replaces the allowed hosts list at runtime.
+
+- `setDeniedHosts(hosts: string[]): Promise<void>`
+
+  Replaces the denied hosts list at runtime.
+
+- `allowHost(hostname: string): Promise<void>`
+
+  Adds a single host to the allowed list.
+
+- `denyHost(hostname: string): Promise<void>`
+
+  Adds a single host to the denied list.
+
+- `removeAllowedHost(hostname: string): Promise<void>`
+
+  Removes a host from the allowed list.
+
+- `removeDeniedHost(hostname: string): Promise<void>`
+
+  Removes a host from the denied list.
+
 To configure interception on the class itself:
 
 - `static outbound = (req, env, ctx) => Response`
@@ -304,14 +343,17 @@ To configure interception on the class itself:
 
   Named handlers that can be selected at runtime with `setOutboundHandler` and `setOutboundByHost`.
 
-Matching order is:
+Processing order (first match wins):
 
-1. Runtime `setOutboundByHost` override
-2. Static `outboundByHost`
-3. Runtime `setOutboundHandler` catch-all
-4. Static `outbound`
-
-If nothing matches, the request goes out normally when `enableInternet` is `true`, and is blocked when `enableInternet` is `false`.
+1. **Denied hosts** — if the hostname matches any `deniedHosts` pattern, the request is blocked (HTTP 520). Overrides everything else.
+2. **Allowed hosts gate** — if `allowedHosts` is non-empty and the hostname does not match, the request is blocked (HTTP 520). When `allowedHosts` is empty this step is skipped.
+3. **Runtime per-host handler** — `setOutboundByHost()` override
+4. **Static per-host handler** — `outboundByHost`
+5. **Runtime catch-all handler** — `setOutboundHandler()` override
+6. **Static catch-all handler** — `outbound`
+7. **Allowed host internet fallback** — if the hostname matched `allowedHosts` but no handler above handled it, the request is forwarded to the internet (even if `enableInternet` is `false`).
+8. **`enableInternet` fallback** — if `true`, the request goes to the internet.
+9. **Default deny** — the request is blocked (HTTP 520).
 
 - `schedule<T = string>(when: Date | number, callback: string, payload?: T): Promise<Schedule<T>>`
 
@@ -529,12 +571,24 @@ You can also set these on a per-instance basis with `start` or `startAndWaitForP
 
 This lets you intercept requests the container makes to the outside world.
 
+You must export `ContainerProxy` from your Worker entrypoint for outbound interception to work:
+
+```typescript
+export { ContainerProxy } from '@cloudflare/containers';
+```
+
 ```typescript
 import { Container, OutboundHandlerContext } from '@cloudflare/containers';
 
 export class MyContainer extends Container {
   defaultPort = 8080;
   enableInternet = false;
+  interceptHttps = true; // also intercept HTTPS outbound traffic
+
+  // Only allow these hosts through the egress chain
+  allowedHosts = ['google.com', 'github.com', 'api.stripe.com'];
+  // Block these hosts unconditionally, even if they appear in allowedHosts
+  deniedHosts = ['evil.com', '*.malware.net'];
 
   static outboundByHost = {
     'google.com': (_req: Request, _env: unknown, ctx: OutboundHandlerContext) => {
@@ -562,7 +616,7 @@ export class MyContainer extends Container {
 }
 ```
 
-Use `outboundByHost` for fixed host rules, `outbound` for a default catch-all, and `outboundHandlers` for reusable named handlers you want to switch on at runtime.
+Use `outboundByHost` for fixed host rules, `outbound` for a default catch-all, and `outboundHandlers` for reusable named handlers you want to switch on at runtime. Use `allowedHosts` and `deniedHosts` for glob-based host filtering (e.g. `'*.example.com'`). See the [full egress documentation](docs/egress.md) for detailed interception strategy and CA certificate setup for HTTPS interception.
 
 ### Multiple Ports and Custom Routing
 

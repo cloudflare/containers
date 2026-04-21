@@ -15,10 +15,10 @@
   "devDependencies": {
     "@types/node": "^20.0.0",
     "typescript": "^5.0.0",
-    "vitest": "^1.0.0",
-    "wrangler": "4.77.0"
+    "vitest": "^3.0.0",
+    "wrangler": "4.81.0"
   },
   "dependencies": {
-    "@cloudflare/workers-types": "^4.0.0"
+    "@cloudflare/workers-types": "^4.20260405.1"
   }
 }

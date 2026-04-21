@@ -1,5 +1,35 @@
 # @cloudflare/containers
 
+## 0.3.3
+
+### Patch Changes
+
+- 7901d0b: Attach custom labels to your containers to help with observability and attribution. Set a `labels` property on your `Container` subclass, or pass `labels` in the `startOptions` argument to `start()` / `startAndWaitForPorts()`, and tag containers by tenant, environment, feature flag, canary cohort, or any other dimension you want to track. In local development, labels are visible on the underlying Docker container via `docker inspect`.
+
+  ```ts
+  class MyContainer extends Container {
+    labels = { tenant: 'acme', env: 'prod' };
+  }
+  ```
+
+## 0.3.2
+
+### Patch Changes
+
+- e8895f1: Preserve response headers when proxying WebSocket upgrades through `Container.fetch()`.
+
+## 0.3.1
+
+### Patch Changes
+
+- 0c06874: Remove debug `console.log(props)` statement from `ContainerProxy` initialization
+
+## 0.3.0
+
+### Minor Changes
+
+- 9b32add: Opt in to interceptOutboundHttps when interceptHttps = true
+
 ## 0.2.4
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@cloudflare/containers",
-  "version": "0.2.4",
+  "version": "0.3.3",
   "description": "Helper class for container-enabled Durable Objects",
   "repository": {
     "type": "git",
@@ -40,7 +40,7 @@
   "license": "ISC",
   "devDependencies": {
     "@changesets/cli": "^2.29.6",
-    "@cloudflare/workers-types": "^4.20260228.1",
+    "@cloudflare/workers-types": "^4.20260421.1",
     "@types/jest": "^29.5.14",
     "@types/node": "^22.15.3",
     "@typescript-eslint/eslint-plugin": "^8.31.1",
