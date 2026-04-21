@@ -12,6 +12,7 @@ export type {
   OutboundHandlerParamsOf,
   OutboundHandlers,
   ReadinessCheck,
+  ReadinessCheckFactoryOptions,
   ReadinessCheckOptions,
 } from './lib/container';
 export { getRandom, loadBalance, getContainer, switchPort } from './lib/utils';

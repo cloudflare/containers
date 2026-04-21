@@ -379,11 +379,11 @@ Processing order (first match wins):
 
   If no name is provided, "cf-singleton-container" is used.
 
-- `portResponding(port: number): ReadinessCheck`
+- `portResponding(port: number, options?: { pingEndpoint?: string }): ReadinessCheck`
 
-  Readiness check factory that waits for the given port to start accepting HTTP connections. See [Readiness Checks](#readiness-checks).
+  Readiness check factory that waits for the given port to start accepting HTTP connections. Pass `pingEndpoint` to override the probe endpoint for this check only. See [Readiness Checks](#readiness-checks).
 
-- `isHealthy(path: string, port?: number, pingEndpoint?: string): ReadinessCheck`
+- `isHealthy(path: string, options?: { port?: number; pingEndpoint?: string }): ReadinessCheck`
 
   Readiness check factory that polls an HTTP path until it returns 2xx. Falls back to `defaultPort` when `port` is omitted; falls back to the host portion of the container's `pingEndpoint` when `pingEndpoint` is omitted. See [Readiness Checks](#readiness-checks).
 

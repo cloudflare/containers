@@ -155,6 +155,24 @@ export type ReadinessCheck = (
 ) => Promise<unknown>;
 
 /**
+ * Options accepted by the `portResponding` and `isHealthy` readiness
+ * check factories.
+ */
+export interface ReadinessCheckFactoryOptions {
+  /**
+   * Port to check. Defaults to the container's `defaultPort` when
+   * omitted. If neither is set, the check rejects.
+   */
+  port?: number;
+  /**
+   * Override the Host header used for the request. Defaults to the host
+   * portion of the container's `pingEndpoint` (e.g. `container` when
+   * `pingEndpoint = 'container/health'`).
+   */
+  pingEndpoint?: string;
+}
+
+/**
  * Readiness check that waits for the given port to start accepting HTTP
  * connections. Any HTTP response (including 4xx) counts as "responding" —
  * the goal is to confirm the process has bound the port.
@@ -163,31 +181,43 @@ export type ReadinessCheck = (
  * class MyApp extends Container {
  *   readyOn = [portResponding(8080)];
  * }
+ *
+ * @example
+ * // Override the Host header used by the probe:
+ * portResponding(8080, { pingEndpoint: 'container/ping' });
  */
-export function portResponding(port: number): ReadinessCheck {
-  return (container, options) =>
-    container.waitForPort({ portToCheck: port, signal: options?.signal });
+export function portResponding(
+  port: number,
+  options: { pingEndpoint?: string } = {}
+): ReadinessCheck {
+  return (container, runOptions) =>
+    container.waitForPort({
+      portToCheck: port,
+      pingEndpoint: options.pingEndpoint,
+      signal: runOptions?.signal,
+    });
 }
 
 /**
  * Readiness check that polls an HTTP path until it returns a 2xx response.
  * Useful for apps that expose a `/health` or `/ready` endpoint.
  *
- * - `port` defaults to the container's `defaultPort`. If neither is set,
- *   the check rejects when it runs.
- * - `pingEndpoint` overrides the Host header used for the request. By
- *   default the container's `pingEndpoint` host is used (e.g. `container`
- *   when `pingEndpoint = 'container/health'`).
- *
  * @example
  * class MyApp extends Container {
  *   defaultPort = 8080;
  *   readyOn = [isHealthy('/health')];
  * }
+ *
+ * @example
+ * // Target a specific port and override the Host header:
+ * isHealthy('/health', { port: 8081, pingEndpoint: 'container' });
  */
-export function isHealthy(path: string, port?: number, pingEndpoint?: string): ReadinessCheck {
-  return (container, options) => {
-    const targetPort = port ?? container.defaultPort;
+export function isHealthy(
+  path: string,
+  options: ReadinessCheckFactoryOptions = {}
+): ReadinessCheck {
+  return (container, runOptions) => {
+    const targetPort = options.port ?? container.defaultPort;
     if (targetPort === undefined) {
       return Promise.reject(
         new Error(`isHealthy('${path}'): no port specified and no defaultPort set on the container`)
@@ -196,8 +226,8 @@ export function isHealthy(path: string, port?: number, pingEndpoint?: string): R
     return container.waitForPath({
       path,
       portToCheck: targetPort,
-      pingEndpoint,
-      signal: options?.signal,
+      pingEndpoint: options.pingEndpoint,
+      signal: runOptions?.signal,
     });
   };
 }
@@ -613,7 +643,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    * class MyApp extends Container {
    *   requiredPorts = [8080, 8081];
    *   // portResponding(8080) and portResponding(8081) are added automatically
-   *   readyOn = [isHealthy('/health', 8080)];
+   *   readyOn = [isHealthy('/health', { port: 8080 })];
    * }
    *
    * Use `addReadinessCheck(...)` to add a check at runtime, or
@@ -1083,15 +1113,17 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    * - `abort`: Optional AbortSignal to cancel waiting
    * - `retries`: Number of retries before giving up (default: TRIES_TO_GET_PORTS)
    * - `waitInterval`: Interval between retries in milliseconds (default: INSTANCE_POLL_INTERVAL_MS)
+   * - `pingEndpoint`: Override the endpoint used for the probe request. Defaults to `this.pingEndpoint`.
    */
-  public async waitForPort(waitOptions: WaitOptions): Promise<number> {
+  public async waitForPort(waitOptions: WaitOptions & { pingEndpoint?: string }): Promise<number> {
+    const endpoint = waitOptions.pingEndpoint ?? this.pingEndpoint;
     return this.pollUntilReady(waitOptions, `Port ${waitOptions.portToCheck}`, async signal => {
       // Any HTTP response counts as "port is listening" — we don't
       // care about status or body. Using the full pingEndpoint as the
       // URL host preserves the documented "container/health" format.
       await this.container
         .getTcpPort(waitOptions.portToCheck)
-        .fetch(`http://${this.pingEndpoint}`, { signal });
+        .fetch(`http://${endpoint}`, { signal });
     });
   }
 
