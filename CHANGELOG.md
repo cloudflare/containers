@@ -1,5 +1,17 @@
 # @cloudflare/containers
 
+## 0.3.3
+
+### Patch Changes
+
+- 7901d0b: Attach custom labels to your containers to help with observability and attribution. Set a `labels` property on your `Container` subclass, or pass `labels` in the `startOptions` argument to `start()` / `startAndWaitForPorts()`, and tag containers by tenant, environment, feature flag, canary cohort, or any other dimension you want to track. In local development, labels are visible on the underlying Docker container via `docker inspect`.
+
+  ```ts
+  class MyContainer extends Container {
+    labels = { tenant: 'acme', env: 'prod' };
+  }
+  ```
+
 ## 0.3.2
 
 ### Patch Changes
