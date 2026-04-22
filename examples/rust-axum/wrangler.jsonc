@@ -1,0 +1,36 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "container-package-rust-axum",
+	"main": "src/index.ts",
+	"compatibility_date": "2025-05-06",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"observability": {
+		"enabled": true
+	},
+	"containers": [
+    {
+      "class_name": "RustAxumContainer",
+      "image": "./Dockerfile",
+      "max_instances": 3,
+      "name": "container-package-rust-axum"
+    }
+  ],
+  "durable_objects": {
+	"bindings": [
+	  {
+		"class_name": "RustAxumContainer",
+        "name": "RUST_AXUM_CONTAINER"
+      }
+    ]
+  },
+	"migrations": [
+		{
+			"new_sqlite_classes": [
+				"RustAxumContainer"
+			],
+			"tag": "v1"
+		}
+	],
+}
