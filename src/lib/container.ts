@@ -33,6 +33,9 @@ const OUTBOUND_CONFIGURATION_KEY = 'OUTBOUND_CONFIGURATION';
 const MAX_ALARM_RETRIES = 3;
 const PING_TIMEOUT_MS = 5000;
 
+const MIN_ALARM_REARM_MS = 100; // Floor for alarm re-arm times
+const MAX_ALARM_REARM_MS = 3 * 60 * 1000; // Default heartbeat
+
 const DEFAULT_SLEEP_AFTER = '10m'; // Default sleep after inactivity time
 const INSTANCE_POLL_INTERVAL_MS = 300; // Default interval for polling container state
 
@@ -1842,10 +1845,6 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       })
       .finally(() => {
         this.monitorSetup = false;
-        if (this.timeout) {
-          if (this.resolve) this.resolve();
-          clearTimeout(this.timeout);
-        }
       });
   }
 
@@ -1877,14 +1876,6 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       return;
     }
 
-    // do not remove this, container DOs ALWAYS need an alarm right now.
-    // The only way for this DO to stop having alarms is:
-    //  1. The container is not running anymore.
-    //  2. Activity expired and it exits.
-    const prevAlarm = Date.now();
-    await this.ctx.storage.setAlarm(prevAlarm);
-    await this.ctx.storage.sync();
-
     // Get all schedules that should be executed now
     const result = this.sql<{
       id: string;
@@ -1895,7 +1886,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     }>`
          SELECT * FROM container_schedules;
        `;
-    let minTime = Date.now() + 3 * 60 * 1000;
+    let minTime = Date.now() + MAX_ALARM_REARM_MS;
 
     const now = Date.now() / 1000;
     // Process each due schedule
@@ -1956,35 +1947,15 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       await this.onActivityExpired();
       // renewActivityTimeout makes sure we don't spam calls here
       this.renewActivityTimeout();
+      await this.ctx.storage.setAlarm(Date.now() + MIN_ALARM_REARM_MS);
       return;
     }
 
     // Math.min(3m or maxTime, sleepTimeout)
     minTime = Math.min(minTimeFromSchedules, minTime, this.sleepAfterMs);
-    const timeout = Math.max(0, minTime - Date.now());
-
-    // await a sleep for maxTime to keep the DO alive for
-    // at least this long
-    await new Promise<void>(resolve => {
-      this.resolve = resolve;
-      if (!this.container.running) {
-        resolve();
-        return;
-      }
-
-      this.timeout = setTimeout(() => {
-        resolve();
-      }, timeout);
-    });
-
-    await this.ctx.storage.setAlarm(Date.now());
-
-    // we exit and we have another alarm,
-    // the next alarm is the one that decides if it should stop the loop.
+    const nextAlarm = Math.max(minTime, Date.now() + MIN_ALARM_REARM_MS);
+    await this.ctx.storage.setAlarm(nextAlarm);
   }
-
-  timeout?: ReturnType<typeof setTimeout>;
-  resolve?: () => void;
 
   // synchronises container state with the container source of truth to process events
   private async syncPendingStoppedEvents() {
@@ -2019,15 +1990,14 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   }
 
   /**
-   * Schedule the next alarm based on upcoming tasks
+   * Schedule the next alarm based on upcoming tasks. Idempotent — no-ops
+   * if an alarm is already set to fire sooner than the requested time.
    */
   public async scheduleNextAlarm(ms = 1000): Promise<void> {
-    const nextTime = ms + Date.now();
-
-    // if not already set
-    if (this.timeout) {
-      if (this.resolve) this.resolve();
-      clearTimeout(this.timeout);
+    const nextTime = Date.now() + Math.max(ms, MIN_ALARM_REARM_MS);
+    const existing = await this.ctx.storage.getAlarm();
+    if (existing !== null && existing <= nextTime) {
+      return;
     }
 
     await this.ctx.storage.setAlarm(nextTime);
