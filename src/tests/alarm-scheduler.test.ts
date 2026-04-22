@@ -100,6 +100,14 @@ class TestContainer extends Container {
   set sleepAfterMsField(value: number) {
     (this as unknown as { sleepAfterMs: number }).sleepAfterMs = value;
   }
+  // Widen private `inflightRequests` for tests simulating an open
+  // WebSocket / streaming response without the full containerFetch path.
+  get inflightRequestsField(): number {
+    return (this as unknown as { inflightRequests: number }).inflightRequests;
+  }
+  set inflightRequestsField(value: number) {
+    (this as unknown as { inflightRequests: number }).inflightRequests = value;
+  }
 }
 
 async function makeContainer(opts: { running?: boolean } = {}) {
@@ -268,5 +276,35 @@ describe('scheduleNextAlarm + alarm cadence invariant', () => {
       const next = mock.alarmTs()!;
       expect(next).toBeGreaterThanOrEqual(Date.now());
     }
+  });
+});
+
+// Regression coverage for cloudflare/containers#147: an open WebSocket
+// (tracked via inflightRequests) must keep the container alive even
+// after the sleepAfter window has elapsed.
+describe('inflight request activity tracking', () => {
+  test('inflightRequests > 0 prevents onActivityExpired and renews the sleepAfter window', async () => {
+    const { container } = await makeContainer({ running: true });
+    const onExpired = jest.spyOn(container, 'onActivityExpired');
+    container.inflightRequestsField = 1;
+    container.sleepAfterMsField = Date.now() - 1;
+
+    await container.alarm();
+
+    expect(onExpired).not.toHaveBeenCalled();
+    // A fresh sleepAfter window should be at least most of `sleepAfter`
+    // ahead (test fixture uses 1h).
+    expect(container.sleepAfterMsField).toBeGreaterThan(Date.now() + 55 * 60 * 1000);
+  });
+
+  test('onActivityExpired fires once the counter drops to zero and sleepAfter is past', async () => {
+    const { container } = await makeContainer({ running: true });
+    const onExpired = jest.spyOn(container, 'onActivityExpired').mockResolvedValue(undefined);
+    container.inflightRequestsField = 0;
+    container.sleepAfterMsField = Date.now() - 1;
+
+    await container.alarm();
+
+    expect(onExpired).toHaveBeenCalledTimes(1);
   });
 });
