@@ -529,10 +529,11 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
 
     const persistedOutboundConfiguration = this.restoreOutboundConfiguration();
     this.ctx.blockConcurrencyWhile(async () => {
-      this.renewActivityTimeout();
-
-      // First thing, schedule the next alarms
+      // First thing, schedule the next alarms. Also yields a microtask
+      // so subclass class-field initializers (e.g. `sleepAfter = "2h"`)
+      // run before renewActivityTimeout reads `this.sleepAfter`.
       await this.scheduleNextAlarm();
+      this.renewActivityTimeout();
 
       const ctor = this.constructor as typeof Container;
       if (
