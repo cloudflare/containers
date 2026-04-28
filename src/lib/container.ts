@@ -482,6 +482,11 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   // The container won't get a SIGKILL if this threshold is triggered.
   sleepAfter: string | number = DEFAULT_SLEEP_AFTER;
 
+  // Timeout after which the container will be forcefully killed
+  // This timeout is absolute from container start time, regardless of activity
+  // When this timeout expires, the container is sent a SIGKILL signal
+  timeout?: string | number;
+
   // Container configuration properties
   // Set these properties directly in your container instance
   envVars: ContainerStartOptions['env'] = {};
@@ -557,6 +562,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     if (options) {
       if (options.defaultPort !== undefined) this.defaultPort = options.defaultPort;
       if (options.sleepAfter !== undefined) this.sleepAfter = options.sleepAfter;
+      if (options.timeout !== undefined) this.timeout = options.timeout;
     }
 
     // Create schedules table if it doesn't exist
@@ -1018,6 +1024,20 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   }
 
   /**
+   * Called when the hard timeout expires.
+   * Override this method to handle timeout events.
+   * By default, calls `this.stop()` to gracefully stop the container.
+   */
+  public async onHardTimeoutExpired(): Promise<void> {
+    if (!this.container.running) {
+      return;
+    }
+
+    console.log(`Container timeout expired after ${this.timeout}. Stopping container.`);
+    await this.stop();
+  }
+
+  /**
    * Error handler for container errors
    * Override this method in subclasses to handle container errors
    * @param error - The error that occurred
@@ -1030,12 +1050,25 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
 
   /**
    * Renew the container's activity timeout
-   *
-   * Call this method whenever there is activity on the container
    */
   public renewActivityTimeout() {
-    const timeoutInMs = parseTimeExpression(this.sleepAfter) * 1000;
-    this.sleepAfterMs = Date.now() + timeoutInMs;
+    if (this.container.running) {
+      const timeoutInMs = parseTimeExpression(this.sleepAfter) * 1000;
+      // Type assertion needed until @cloudflare/workers-types is updated
+      const containerAny = this.container as any;
+      if (typeof containerAny.setInactivityTimeout === 'function') {
+        containerAny.setInactivityTimeout(timeoutInMs).catch((error: any) => {
+          console.error('Failed to set inactivity timeout:', error);
+        });
+      }
+    }
+  }
+
+  /**
+   * Set up timeouts when the container starts
+   */
+  private setupTimeout() {
+    this.renewActivityTimeout();
   }
 
   /**
@@ -1338,7 +1371,6 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
 
   private monitorSetup = false;
 
-  private sleepAfterMs = 0;
   private inflightRequests = 0;
 
   // Outbound interception runtime overrides (passed through ContainerProxy props)
@@ -1718,6 +1750,13 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       if (entrypoint) startConfig.entrypoint = entrypoint;
       if (labels && Object.keys(labels).length > 0) startConfig.labels = labels;
 
+      // Add hardTimeout if configured
+      if (this.timeout) {
+        const hardTimeoutMs = parseTimeExpression(this.timeout) * 1000;
+        // Type assertion needed until @cloudflare/workers-types is updated
+        (startConfig as any).hardTimeout = hardTimeoutMs;
+      }
+
       this.renewActivityTimeout();
       const handleError = async () => {
         const err = await this.monitor?.catch(err => err as Error);
@@ -1751,6 +1790,9 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
         await this.refreshOutboundInterception();
         this.container.start(startConfig);
         this.monitor = this.container.monitor();
+        
+        // Set up timeout when container starts
+        this.setupTimeout();
       } else {
         await this.scheduleNextAlarm();
       }
@@ -1843,9 +1885,9 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       })
       .finally(() => {
         this.monitorSetup = false;
-        if (this.timeout) {
+        if (this.timeoutId) {
           if (this.resolve) this.resolve();
-          clearTimeout(this.timeout);
+          clearTimeout(this.timeoutId);
         }
       });
   }
@@ -1896,7 +1938,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     }>`
          SELECT * FROM container_schedules;
        `;
-    let minTime = Date.now() + 3 * 60 * 1000;
+    // minTime will be calculated later based on scheduled tasks
 
     const now = Date.now() / 1000;
     // Process each due schedule
@@ -1938,7 +1980,10 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     }>`
          SELECT * FROM container_schedules;
        `;
-    const minTimeFromSchedules = Math.min(...resultForMinTime.map(r => r.time * 1000));
+    // Calculate next scheduled task time, or default to 3 minutes if no tasks
+    const minTimeFromSchedules = resultForMinTime.length > 0 
+      ? Math.min(...resultForMinTime.map(r => r.time * 1000))
+      : Date.now() + 3 * 60 * 1000; // 3 minutes default
 
     // if not running and nothing to do, stop
     if (!this.container.running) {
@@ -1953,15 +1998,8 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       return;
     }
 
-    if (this.isActivityExpired()) {
-      await this.onActivityExpired();
-      // renewActivityTimeout makes sure we don't spam calls here
-      this.renewActivityTimeout();
-      return;
-    }
-
-    // Math.min(3m or maxTime, sleepTimeout)
-    minTime = Math.min(minTimeFromSchedules, minTime, this.sleepAfterMs);
+    // Timeouts handled natively by workerd
+    const minTime = minTimeFromSchedules;
     const timeout = Math.max(0, minTime - Date.now());
 
     // await a sleep for maxTime to keep the DO alive for
@@ -1973,7 +2011,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
         return;
       }
 
-      this.timeout = setTimeout(() => {
+      this.timeoutId = setTimeout(() => {
         resolve();
       }, timeout);
     });
@@ -1984,7 +2022,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     // the next alarm is the one that decides if it should stop the loop.
   }
 
-  timeout?: ReturnType<typeof setTimeout>;
+  timeoutId?: ReturnType<typeof setTimeout>;
   resolve?: () => void;
 
   // synchronises container state with the container source of truth to process events
@@ -2026,9 +2064,9 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     const nextTime = ms + Date.now();
 
     // if not already set
-    if (this.timeout) {
+    if (this.timeoutId) {
       if (this.resolve) this.resolve();
-      clearTimeout(this.timeout);
+      clearTimeout(this.timeoutId);
     }
 
     await this.ctx.storage.setAlarm(nextTime);
@@ -2095,12 +2133,4 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     return this.toSchedule(schedule);
   }
 
-  private isActivityExpired(): boolean {
-    if (this.inflightRequests > 0) {
-      this.renewActivityTimeout();
-      return false;
-    }
-
-    return this.sleepAfterMs <= Date.now();
-  }
 }
