@@ -78,6 +78,7 @@ describe('Container', () => {
         },
       },
       blockConcurrencyWhile: jest.fn(fn => fn()),
+      abort: jest.fn(),
       container: {
         running: false,
         start: jest.fn(),
@@ -171,6 +172,29 @@ describe('Container', () => {
         cancellationOptions: { instanceGetTimeoutMS: 1, waitInterval: 1 },
       })
     ).rejects.toThrow('you are requesting too many containers per second');
+  });
+
+  test('startAndWaitForPorts should abort the durable object on final network loss', async () => {
+    mockCtx.container.monitor = jest.fn().mockReturnValue({
+      catch: jest
+        .fn()
+        .mockResolvedValue(
+          new Error('there is no container instance that can be provided to this durable object')
+        ),
+    });
+    mockCtx.container.getTcpPort = jest.fn().mockReturnValue({
+      fetch: jest.fn().mockRejectedValue(new Error('Network connection lost')),
+    });
+
+    await expect(
+      // @ts-ignore - ignore TypeScript errors for testing
+      container.startAndWaitForPorts({
+        ports: 8080,
+        cancellationOptions: { instanceGetTimeoutMS: 1, waitInterval: 1 },
+      })
+    ).rejects.toThrow('there is no container instance that can be provided to this durable object');
+
+    expect(mockCtx.abort).toHaveBeenCalled();
   });
 
   test('startAndWaitForPorts should start container without port checking if no ports available', async () => {

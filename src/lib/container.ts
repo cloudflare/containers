@@ -1795,8 +1795,6 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
 
         // TODO: Make this error specific to this, but then catch it above w something else
         if (totalTries === tries + 1) {
-          await handleError();
-
           if (error instanceof Error && error.message.includes('Network connection lost')) {
             // We have to abort here, the reasoning is that we might've found
             // ourselves in an internal error where the Worker is stuck with a failed connection to the
@@ -1806,6 +1804,8 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
             // durable object so it retries to reconnect from scratch.
             this.ctx.abort();
           }
+
+          await handleError();
 
           throw new Error(NO_CONTAINER_INSTANCE_ERROR);
         }
