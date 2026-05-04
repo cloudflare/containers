@@ -21,6 +21,7 @@ import { DurableObject, WorkerEntrypoint } from 'cloudflare:workers';
 
 const NO_CONTAINER_INSTANCE_ERROR =
   'there is no container instance that can be provided to this durable object';
+const RATE_LIMITED_ERROR = 'you are requesting too many containers per second';
 const RUNTIME_SIGNALLED_ERROR = 'runtime signalled the container to exit:';
 const UNEXPECTED_EXIT_ERROR = 'container exited with unexpected exit code:';
 const NOT_LISTENING_ERROR = 'the container is not listening';
@@ -141,6 +142,7 @@ function isErrorOfType(e: unknown, matchingString: string): boolean {
 
 const isNoInstanceError = (error: unknown): boolean =>
   isErrorOfType(error, NO_CONTAINER_INSTANCE_ERROR);
+const isRateLimitedError = (error: unknown): boolean => isErrorOfType(error, RATE_LIMITED_ERROR);
 const isRuntimeSignalledError = (error: unknown): boolean =>
   isErrorOfType(error, RUNTIME_SIGNALLED_ERROR);
 const isNotListeningError = (error: unknown): boolean => isErrorOfType(error, NOT_LISTENING_ERROR);
@@ -1169,12 +1171,15 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
             'There is no Container instance available at this time.\nThis is likely because you have reached your max concurrent instance count (set in wrangler config) or are you currently provisioning the Container.\nIf you are deploying your Container for the first time, check your dashboard to see provisioning status, this may take a few minutes.',
             { status: 503 }
           );
-        } else {
-          return new Response(
-            `Failed to start container: ${e instanceof Error ? e.message : String(e)}`,
-            { status: 500 }
-          );
         }
+
+        if (isRateLimitedError(e)) {
+          return new Response(e instanceof Error ? e.message : String(e), { status: 429 });
+        }
+
+        return new Response(`Failed to start container: ${e instanceof Error ? e.message : String(e)}`, {
+          status: 500,
+        });
       }
     }
 
@@ -1790,6 +1795,8 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
 
         // TODO: Make this error specific to this, but then catch it above w something else
         if (totalTries === tries + 1) {
+          await handleError();
+
           if (error instanceof Error && error.message.includes('Network connection lost')) {
             // We have to abort here, the reasoning is that we might've found
             // ourselves in an internal error where the Worker is stuck with a failed connection to the
