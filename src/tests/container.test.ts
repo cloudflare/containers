@@ -1,6 +1,25 @@
 // Mock partyserver first
 jest.mock('partyserver');
 
+jest.mock('cloudflare:workers', () => {
+  class MockDurableObject {
+    ctx: unknown;
+    env: unknown;
+
+    constructor(ctx: unknown, env: unknown) {
+      this.ctx = ctx;
+      this.env = env;
+    }
+  }
+
+  class MockWorkerEntrypoint {}
+
+  return {
+    DurableObject: MockDurableObject,
+    WorkerEntrypoint: MockWorkerEntrypoint,
+  };
+}, { virtual: true });
+
 import { Container } from '../lib/container';
 import { getRandom } from '../lib/utils';
 
@@ -44,11 +63,22 @@ describe('Container', () => {
     // Create a mock context with necessary container methods
     mockCtx = {
       storage: {
+        get: jest.fn(),
+        put: jest.fn().mockResolvedValue(undefined),
+        delete: jest.fn().mockResolvedValue(undefined),
+        setAlarm: jest.fn().mockResolvedValue(undefined),
+        sync: jest.fn().mockResolvedValue(undefined),
+        kv: {
+          get: jest.fn(),
+          put: jest.fn().mockResolvedValue(undefined),
+          delete: jest.fn().mockResolvedValue(undefined),
+        },
         sql: {
           exec: jest.fn().mockReturnValue([]),
         },
       },
       blockConcurrencyWhile: jest.fn(fn => fn()),
+      abort: jest.fn(),
       container: {
         running: false,
         start: jest.fn(),
@@ -127,6 +157,46 @@ describe('Container', () => {
     expect(mockCtx.container.getTcpPort).toHaveBeenCalledWith(8080);
   });
 
+  test('startAndWaitForPorts should surface rate-limited startup errors on the final retry', async () => {
+    mockCtx.container.monitor = jest.fn().mockReturnValue({
+      catch: jest.fn().mockResolvedValue(new Error('you are requesting too many containers per second')),
+    });
+    mockCtx.container.getTcpPort = jest.fn().mockReturnValue({
+      fetch: jest.fn().mockRejectedValue(new Error('unexpected startup failure')),
+    });
+
+    await expect(
+      // @ts-ignore - ignore TypeScript errors for testing
+      container.startAndWaitForPorts({
+        ports: 8080,
+        cancellationOptions: { instanceGetTimeoutMS: 1, waitInterval: 1 },
+      })
+    ).rejects.toThrow('you are requesting too many containers per second');
+  });
+
+  test('startAndWaitForPorts should abort the durable object on final network loss', async () => {
+    mockCtx.container.monitor = jest.fn().mockReturnValue({
+      catch: jest
+        .fn()
+        .mockResolvedValue(
+          new Error('there is no container instance that can be provided to this durable object')
+        ),
+    });
+    mockCtx.container.getTcpPort = jest.fn().mockReturnValue({
+      fetch: jest.fn().mockRejectedValue(new Error('Network connection lost')),
+    });
+
+    await expect(
+      // @ts-ignore - ignore TypeScript errors for testing
+      container.startAndWaitForPorts({
+        ports: 8080,
+        cancellationOptions: { instanceGetTimeoutMS: 1, waitInterval: 1 },
+      })
+    ).rejects.toThrow('there is no container instance that can be provided to this durable object');
+
+    expect(mockCtx.abort).toHaveBeenCalled();
+  });
+
   test('startAndWaitForPorts should start container without port checking if no ports available', async () => {
     // Create a container without defaultPort or requiredPorts
     // @ts-ignore - ignore TypeScript errors for testing
@@ -173,6 +243,20 @@ describe('Container', () => {
 
     // Just make sure that tcpPort.fetch was called - the exact URL is tested in the container.ts implementation
     expect(tcpPort.fetch).toHaveBeenCalledWith(expect.any(String), expect.any(Object));
+  });
+
+  test('containerFetch should return 429 when startup is rate limited', async () => {
+    const mockRequest = new Request('https://example.com/test', { method: 'GET' });
+    const startSpy = jest
+      .spyOn(container, 'startAndWaitForPorts')
+      .mockRejectedValue(new Error('you are requesting too many containers per second'));
+
+    // @ts-ignore - ignore TypeScript errors for testing
+    const response = await container.containerFetch(mockRequest);
+
+    expect(startSpy).toHaveBeenCalledWith(8080, { abort: mockRequest.signal });
+    expect(response.status).toBe(429);
+    await expect(response.text()).resolves.toBe('you are requesting too many containers per second');
   });
 
   test('containerFetch should throw error when no port is specified', async () => {
@@ -302,13 +386,13 @@ describe('Container', () => {
 describe('getRandom', () => {
   test('should return a container stub', async () => {
     const mockBinding = {
-      idFromString: jest.fn().mockReturnValue('mock-id'),
+      idFromName: jest.fn().mockReturnValue('mock-id'),
       get: jest.fn().mockReturnValue({ mockStub: true }),
     };
 
     const result = await getRandom(mockBinding as any, 5);
 
-    expect(mockBinding.idFromString).toHaveBeenCalled();
+    expect(mockBinding.idFromName).toHaveBeenCalled();
     expect(mockBinding.get).toHaveBeenCalledWith('mock-id');
     expect(result).toEqual({ mockStub: true });
   });
