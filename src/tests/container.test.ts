@@ -249,6 +249,20 @@ describe('Container', () => {
     expect(mockCtx.container.getTcpPort).toHaveBeenCalledWith(33);
   });
 
+  test('syncPendingStoppedEvents should call onStop for stopped container with running state', async () => {
+    mockCtx.storage.get.mockResolvedValue({ status: 'running', lastChange: Date.now() });
+    mockCtx.container.running = false;
+    const onStopSpy = vi.spyOn(container, 'onStop');
+
+    await (container as any).syncPendingStoppedEvents();
+
+    expect(onStopSpy).toHaveBeenCalledWith({ exitCode: 0, reason: 'exit' });
+    expect(mockCtx.storage.put).toHaveBeenCalledWith(
+      '__CF_CONTAINER_STATE',
+      expect.objectContaining({ status: 'stopped' })
+    );
+  });
+
   test('containerFetch should forward requests to container', async () => {
     const mockRequest = new Request('https://example.com/test?query=value', {
       method: 'GET',

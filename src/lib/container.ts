@@ -2034,7 +2034,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   // synchronises container state with the container source of truth to process events
   private async syncPendingStoppedEvents() {
     const state = await this.state.getState();
-    if (!this.container.running && state.status === 'healthy') {
+    if (!this.container.running && (state.status === 'healthy' || state.status === 'running')) {
       await this.callOnStop({ exitCode: 0, reason: 'exit' });
       return;
     }
