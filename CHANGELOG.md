@@ -1,5 +1,26 @@
 # @cloudflare/containers
 
+## 0.3.4
+
+### Patch Changes
+
+- 8442f40: Fix a race in `Container` where concurrent `container.fetch` calls to a cold container could throw `"start() cannot be called on a container that is already running."`.
+- cf01432: Ensure pending stop events are processed when the persisted container lifecycle state is still `running` but the underlying container has already exited.
+
+  Migrate the root unit test suite from Jest to Vitest and add a `test:unit` script for running `src/tests` directly.
+
+- cf41295: Fix subclass `sleepAfter` overrides being ignored during the initial activity timeout setup. Previously, the base `Container` constructor called `renewActivityTimeout()` inside `blockConcurrencyWhile()` before subclass class-field initializers ran, so the first `sleepAfterMs` was always computed from the base default (`'10m'`) regardless of whether the subclass declared `sleepAfter = '2h'`. A container could then be killed by the activity timeout before the subclass's longer window took effect on the next `renewActivityTimeout` call. Declarations like:
+
+  ```ts
+  class BigContainer extends Container {
+    sleepAfter = '2h';
+  }
+  ```
+
+  are now honored from the very first alarm check.
+
+- 07fedbb: Preserve Cloudchamber startup rate-limit errors in the Containers helper and return HTTP 429 from `containerFetch()` when startup is rate limited.
+
 ## 0.3.3
 
 ### Patch Changes
