@@ -1177,9 +1177,12 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
           return new Response(e instanceof Error ? e.message : String(e), { status: 429 });
         }
 
-        return new Response(`Failed to start container: ${e instanceof Error ? e.message : String(e)}`, {
-          status: 500,
-        });
+        return new Response(
+          `Failed to start container: ${e instanceof Error ? e.message : String(e)}`,
+          {
+            status: 500,
+          }
+        );
       }
     }
 
@@ -1340,6 +1343,15 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   private onStopCalled = false;
   private state: ContainerState;
   private monitor: Promise<unknown> | undefined;
+
+  // Coalesces concurrent calls to startContainerIfNotRunning so we never
+  // call `this.container.start()` twice. Without this guard, two requests
+  // racing the readiness path can both pass the `if (this.container.running)`
+  // early-return (each yielding the DO input gate at storage awaits) and
+  // both reach the synchronous workerd `start()`, causing the second to
+  // throw "start() cannot be called on a container that is already running."
+  // See https://github.com/cloudflare/containers/issues/173.
+  private startInFlight: Promise<number> | undefined;
 
   private monitorSetup = false;
 
@@ -1688,7 +1700,9 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     waitOptions: WaitOptions,
     options?: ContainerStartConfigOptions
   ): Promise<number> {
-    // Start the container if it's not running
+    // Fast path: container is already running. Safe to short-circuit
+    // synchronously since `this.container.running` only flips true after
+    // container.start() returns.
     if (this.container.running) {
       if (!this.monitor) {
         this.monitor = this.container.monitor();
@@ -1697,6 +1711,31 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       return 0;
     }
 
+    // Coalesce concurrent starts. If another caller is already executing
+    // the start path, await their outcome (success or failure) instead of
+    // racing them to a second `this.container.start()` invocation.
+    if (this.startInFlight) {
+      return this.startInFlight;
+    }
+
+    const startPromise = this.doStartContainer(waitOptions, options);
+    this.startInFlight = startPromise;
+    try {
+      return await startPromise;
+    } finally {
+      // Clear the in-flight marker once this attempt resolves so future
+      // start attempts (e.g. after the container has stopped) can proceed.
+      // Use identity check in case a later attempt has already replaced it.
+      if (this.startInFlight === startPromise) {
+        this.startInFlight = undefined;
+      }
+    }
+  }
+
+  private async doStartContainer(
+    waitOptions: WaitOptions,
+    options?: ContainerStartConfigOptions
+  ): Promise<number> {
     const abortedSignal = new Promise(res => {
       waitOptions.signal?.addEventListener('abort', () => {
         res(true);
