@@ -5,6 +5,6 @@ export default defineConfig({
     globals: true,
     testTimeout: 60000,
     hookTimeout: 120000,
-    include: ['fixtures/**/test/**/*.{test,spec}.ts'],
+    include: ['src/tests/**/*.test.ts', 'fixtures/**/test/**/*.{test,spec}.ts'],
   },
 });
