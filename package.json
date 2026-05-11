@@ -50,7 +50,7 @@
     "prettier": "^3.5.3",
     "tsup": "^8.0.2",
     "typescript": "latest",
-    "vitest": "^1.0.0"
+    "vitest": "^4.1.6"
   },
   "publishConfig": {
     "access": "public"
