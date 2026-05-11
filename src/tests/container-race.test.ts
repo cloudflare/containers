@@ -17,9 +17,9 @@
 // produces, with mocked storage that yields a microtask on every
 // operation (the same shape real DO storage has).
 
-jest.mock('partyserver');
+import { describe, expect, test, vi } from 'vitest';
 
-jest.mock(
+vi.mock(
   'cloudflare:workers',
   () => {
     class MockDurableObject {
@@ -35,11 +35,10 @@ jest.mock(
       DurableObject: MockDurableObject,
       WorkerEntrypoint: MockWorkerEntrypoint,
     };
-  },
-  { virtual: true }
+  }
 );
 
-jest.mock('node:async_hooks', () => {
+vi.mock('node:async_hooks', () => {
   return {
     AsyncLocalStorage: class MockAsyncLocalStorage {
       getStore() {
@@ -69,7 +68,7 @@ function makeMockCtx() {
     running: false,
   };
 
-  const start = jest.fn(() => {
+  const start = vi.fn(() => {
     if (containerState.running) {
       // Mirrors workerd src/workerd/api/container.c++:209
       throw new Error('start() cannot be called on a container that is already running.');
@@ -77,13 +76,13 @@ function makeMockCtx() {
     containerState.running = true;
   });
 
-  // Jest's mockResolvedValue(undefined) gives a microtask boundary, which is
+  // Vitest's mockResolvedValue(undefined) gives a microtask boundary, which is
   // the same yield-point real DO storage operations have.
   // tcpPort.fetch is only reached on the success path; the race we want
   // to demonstrate happens earlier, in start(). Returning a Response with
   // explicit `webSocket: null` keeps the success path off the WebSocket
   // branch in containerFetch.
-  const tcpPortFetch = jest.fn(
+  const tcpPortFetch = vi.fn(
     () =>
       Promise.resolve({
         status: 200,
@@ -95,20 +94,24 @@ function makeMockCtx() {
 
   const ctx: any = {
     storage: {
-      get: jest.fn().mockResolvedValue(undefined),
-      put: jest.fn().mockResolvedValue(undefined),
-      delete: jest.fn().mockResolvedValue(undefined),
-      setAlarm: jest.fn().mockResolvedValue(undefined),
-      sync: jest.fn().mockResolvedValue(undefined),
+      get: vi.fn().mockResolvedValue(undefined),
+      put: vi.fn().mockResolvedValue(undefined),
+      delete: vi.fn().mockResolvedValue(undefined),
+      setAlarm: vi.fn().mockResolvedValue(undefined),
+      sync: vi.fn().mockResolvedValue(undefined),
       kv: {
-        get: jest.fn(),
-        put: jest.fn().mockResolvedValue(undefined),
-        delete: jest.fn().mockResolvedValue(undefined),
+        get: vi.fn(),
+        put: vi.fn().mockResolvedValue(undefined),
+        delete: vi.fn().mockResolvedValue(undefined),
       },
-      sql: { exec: jest.fn().mockReturnValue([]) },
+      sql: { exec: vi.fn().mockReturnValue([]) },
     },
-    blockConcurrencyWhile: jest.fn((fn: () => Promise<unknown>) => fn()),
-    abort: jest.fn(),
+    blockConcurrencyWhile: vi.fn((fn: () => Promise<unknown>) => fn()),
+    abort: vi.fn(),
+    id: { toString: vi.fn().mockReturnValue('test-container-id') },
+    exports: {
+      ContainerProxy: vi.fn().mockReturnValue({ fetch: vi.fn() }),
+    },
     container: {
       get running() {
         return containerState.running;
@@ -117,9 +120,13 @@ function makeMockCtx() {
         containerState.running = v;
       },
       start,
-      destroy: jest.fn(),
-      monitor: jest.fn().mockReturnValue(new Promise(() => {})),
-      getTcpPort: jest.fn(() => ({ fetch: tcpPortFetch })),
+      signal: vi.fn(),
+      destroy: vi.fn(),
+      monitor: vi.fn().mockReturnValue(new Promise(() => {})),
+      interceptOutboundHttp: vi.fn().mockResolvedValue(undefined),
+      interceptOutboundHttps: vi.fn().mockResolvedValue(undefined),
+      interceptAllOutboundHttp: vi.fn().mockResolvedValue(undefined),
+      getTcpPort: vi.fn(() => ({ fetch: tcpPortFetch })),
     },
   };
 

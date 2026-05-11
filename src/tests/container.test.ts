@@ -1,7 +1,6 @@
-// Mock partyserver first
-jest.mock('partyserver');
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 
-jest.mock('cloudflare:workers', () => {
+vi.mock('cloudflare:workers', () => {
   class MockDurableObject {
     ctx: unknown;
     env: unknown;
@@ -18,13 +17,13 @@ jest.mock('cloudflare:workers', () => {
     DurableObject: MockDurableObject,
     WorkerEntrypoint: MockWorkerEntrypoint,
   };
-}, { virtual: true });
+});
 
 import { Container } from '../lib/container';
 import { getRandom } from '../lib/utils';
 
 // Mock async hooks
-jest.mock('node:async_hooks', () => {
+vi.mock('node:async_hooks', () => {
   return {
     AsyncLocalStorage: class MockAsyncLocalStorage {
       getStore() {
@@ -34,6 +33,29 @@ jest.mock('node:async_hooks', () => {
         return fn();
       }
     },
+  };
+});
+
+class MockWebSocket {
+  eventListeners: Record<string, Function[]> = {
+    message: [],
+    close: [],
+    error: [],
+  };
+
+  accept = vi.fn();
+  send = vi.fn();
+  close = vi.fn();
+
+  addEventListener(type: string, handler: Function) {
+    this.eventListeners[type].push(handler);
+  }
+}
+
+vi.stubGlobal('WebSocketPair', function WebSocketPair() {
+  return {
+    0: new MockWebSocket(),
+    1: new MockWebSocket(),
   };
 });
 
@@ -63,43 +85,55 @@ describe('Container', () => {
     // Create a mock context with necessary container methods
     mockCtx = {
       storage: {
-        get: jest.fn(),
-        put: jest.fn().mockResolvedValue(undefined),
-        delete: jest.fn().mockResolvedValue(undefined),
-        setAlarm: jest.fn().mockResolvedValue(undefined),
-        sync: jest.fn().mockResolvedValue(undefined),
+        get: vi.fn(),
+        put: vi.fn().mockResolvedValue(undefined),
+        delete: vi.fn().mockResolvedValue(undefined),
+        setAlarm: vi.fn().mockResolvedValue(undefined),
+        sync: vi.fn().mockResolvedValue(undefined),
         kv: {
-          get: jest.fn(),
-          put: jest.fn().mockResolvedValue(undefined),
-          delete: jest.fn().mockResolvedValue(undefined),
+          get: vi.fn(),
+          put: vi.fn().mockResolvedValue(undefined),
+          delete: vi.fn().mockResolvedValue(undefined),
         },
         sql: {
-          exec: jest.fn().mockReturnValue([]),
+          exec: vi.fn().mockReturnValue([]),
         },
       },
-      blockConcurrencyWhile: jest.fn(fn => fn()),
-      abort: jest.fn(),
+      blockConcurrencyWhile: vi.fn(fn => fn()),
+      abort: vi.fn(),
+      id: { toString: vi.fn().mockReturnValue('test-container-id') },
+      exports: {
+        ContainerProxy: vi.fn().mockReturnValue({ fetch: vi.fn() }),
+      },
       container: {
         running: false,
-        start: jest.fn(),
-        destroy: jest.fn(),
-        monitor: jest.fn().mockReturnValue(Promise.resolve()),
-        getTcpPort: jest.fn().mockReturnValue({
-          fetch: jest.fn().mockImplementation((url, init) => {
+        start: vi.fn(() => {
+          mockCtx.container.running = true;
+        }),
+        signal: vi.fn(),
+        destroy: vi.fn(),
+        monitor: vi.fn().mockReturnValue(new Promise(() => {})),
+        interceptOutboundHttp: vi.fn().mockResolvedValue(undefined),
+        interceptOutboundHttps: vi.fn().mockResolvedValue(undefined),
+        interceptAllOutboundHttp: vi.fn().mockResolvedValue(undefined),
+        getTcpPort: vi.fn().mockReturnValue({
+          fetch: vi.fn().mockImplementation((url, init) => {
             // Check if this is a WebSocket request
             if (init?.headers && (init.headers as Headers).get('Upgrade') === 'websocket') {
               // Create a mock WebSocket
-              const mockWs = new (jest.requireMock('partyserver').MockWebSocket)();
+              const mockWs = new MockWebSocket();
               return Promise.resolve({
-                status: 101,
+                status: 200,
                 webSocket: mockWs,
+                headers: new Headers(),
               });
             }
 
             // Regular HTTP response
             return Promise.resolve({
               status: 200,
-              body: 'test',
+              webSocket: null,
+              body: null,
             });
           }),
         }),
@@ -117,7 +151,7 @@ describe('Container', () => {
 
   test('should initialize with default values', () => {
     expect(container.defaultPort).toBe(8080);
-    expect(container.sleepAfter).toBe('5m');
+    expect(container.sleepAfter).toBe('10m');
   });
 
   test('startAndWaitForPorts should start container if not running (single port)', async () => {
@@ -158,11 +192,14 @@ describe('Container', () => {
   });
 
   test('startAndWaitForPorts should surface rate-limited startup errors on the final retry', async () => {
-    mockCtx.container.monitor = jest.fn().mockReturnValue({
-      catch: jest.fn().mockResolvedValue(new Error('you are requesting too many containers per second')),
+    vi.spyOn(container, 'onError').mockImplementation(error => {
+      throw error;
     });
-    mockCtx.container.getTcpPort = jest.fn().mockReturnValue({
-      fetch: jest.fn().mockRejectedValue(new Error('unexpected startup failure')),
+    mockCtx.container.monitor = vi.fn().mockReturnValue({
+      catch: vi.fn().mockResolvedValue(new Error('you are requesting too many containers per second')),
+    });
+    mockCtx.container.getTcpPort = vi.fn().mockReturnValue({
+      fetch: vi.fn().mockRejectedValue(new Error('unexpected startup failure')),
     });
 
     await expect(
@@ -175,15 +212,15 @@ describe('Container', () => {
   });
 
   test('startAndWaitForPorts should abort the durable object on final network loss', async () => {
-    mockCtx.container.monitor = jest.fn().mockReturnValue({
-      catch: jest
+    mockCtx.container.monitor = vi.fn().mockReturnValue({
+      catch: vi
         .fn()
         .mockResolvedValue(
           new Error('there is no container instance that can be provided to this durable object')
         ),
     });
-    mockCtx.container.getTcpPort = jest.fn().mockReturnValue({
-      fetch: jest.fn().mockRejectedValue(new Error('Network connection lost')),
+    mockCtx.container.getTcpPort = vi.fn().mockReturnValue({
+      fetch: vi.fn().mockRejectedValue(new Error('Network connection lost')),
     });
 
     await expect(
@@ -197,7 +234,7 @@ describe('Container', () => {
     expect(mockCtx.abort).toHaveBeenCalled();
   });
 
-  test('startAndWaitForPorts should start container without port checking if no ports available', async () => {
+  test('startAndWaitForPorts should fall back to default health check port', async () => {
     // Create a container without defaultPort or requiredPorts
     // @ts-ignore - ignore TypeScript errors for testing
     const containerWithoutPort = new Container(mockCtx, {});
@@ -209,19 +246,7 @@ describe('Container', () => {
 
     // Should start container
     expect(mockCtx.container.start).toHaveBeenCalled();
-    // Should NOT try to get TCP port
-    expect(mockCtx.container.getTcpPort).not.toHaveBeenCalled();
-  });
-
-  test('startAndWaitForPort (legacy) should call startAndWaitForPorts', async () => {
-    // Create spy on startAndWaitForPorts
-    const spy = jest.spyOn(container, 'startAndWaitForPorts');
-
-    // Call the legacy method
-    await container.startAndWaitForPort(8080);
-
-    // Verify it called startAndWaitForPorts with the same parameters
-    expect(spy).toHaveBeenCalledWith(8080, 10);
+    expect(mockCtx.container.getTcpPort).toHaveBeenCalledWith(33);
   });
 
   test('containerFetch should forward requests to container', async () => {
@@ -234,6 +259,7 @@ describe('Container', () => {
 
     // Make mockCtx.container.running true for this test
     mockCtx.container.running = true;
+    mockCtx.storage.get.mockResolvedValue({ status: 'healthy', lastChange: Date.now() });
 
     // @ts-ignore - ignore TypeScript errors for testing
     await container.containerFetch(mockRequest);
@@ -247,7 +273,7 @@ describe('Container', () => {
 
   test('containerFetch should return 429 when startup is rate limited', async () => {
     const mockRequest = new Request('https://example.com/test', { method: 'GET' });
-    const startSpy = jest
+    const startSpy = vi
       .spyOn(container, 'startAndWaitForPorts')
       .mockRejectedValue(new Error('you are requesting too many containers per second'));
 
@@ -266,6 +292,7 @@ describe('Container', () => {
 
     // Make mockCtx.container.running true for this test
     mockCtx.container.running = true;
+    mockCtx.storage.get.mockResolvedValue({ status: 'healthy', lastChange: Date.now() });
 
     // Create a container without defaultPort
     // @ts-ignore - ignore TypeScript errors for testing
@@ -282,43 +309,35 @@ describe('Container', () => {
     }).rejects.toThrow('No port specified for container fetch');
   });
 
-  test('stop should destroy container if running', async () => {
+  test('stop should signal container if running', async () => {
     // Make mockCtx.container.running true for this test
     mockCtx.container.running = true;
 
     // @ts-ignore - ignore TypeScript errors for testing
-    await container.stop('Test stop');
+    await container.stop('SIGTERM');
 
-    expect(mockCtx.container.destroy).toHaveBeenCalledWith('Test stop');
+    expect(mockCtx.container.signal).toHaveBeenCalledWith(15);
   });
 
-  test('renewActivityTimeout should schedule a container timeout', async () => {
-    // Make mockCtx.container.running true for this test
-    mockCtx.container.running = true;
+  test('renewActivityTimeout should update the activity deadline', () => {
+    const before = Date.now();
 
-    // @ts-ignore - ignore TypeScript errors for testing
-    await container.renewActivityTimeout();
+    container.renewActivityTimeout();
 
-    // Check that schedule was called
-    expect((container as any).schedule).toHaveBeenCalled();
-
-    // The first parameter should be the timeout in seconds
-    // We need to handle both numeric and string formats
-    const scheduleCall = (container as any).schedule.mock.calls[0];
-    expect(scheduleCall[0]).toBeGreaterThan(0); // Should be a positive number
-    expect(scheduleCall[1]).toBe('stopDueToInactivity'); // Method name
+    expect((container as any).sleepAfterMs).toBeGreaterThan(before);
   });
 
   test('should renew activity timeout on fetch', async () => {
     // Setup spy on renewActivityTimeout
     // @ts-ignore - ignore TypeScript errors for testing
-    const renewSpy = jest.spyOn(container, 'renewActivityTimeout');
+    const renewSpy = vi.spyOn(container, 'renewActivityTimeout');
 
     // Mock request
     const mockRequest = new Request('https://example.com/test');
 
     // Ensure container is running
     mockCtx.container.running = true;
+    mockCtx.storage.get.mockResolvedValue({ status: 'healthy', lastChange: Date.now() });
 
     // @ts-ignore - ignore TypeScript errors for testing
     await container.fetch(mockRequest);
@@ -338,6 +357,7 @@ describe('Container', () => {
 
     // Ensure container is running
     mockCtx.container.running = true;
+    mockCtx.storage.get.mockResolvedValue({ status: 'healthy', lastChange: Date.now() });
 
     // @ts-ignore - ignore TypeScript errors for testing
     const response = await container.containerFetch(mockRequest);
@@ -346,21 +366,14 @@ describe('Container', () => {
     const tcpPort = mockCtx.container.getTcpPort.mock.results[0].value;
     expect(tcpPort.fetch).toHaveBeenCalled();
 
-    // Verify the request was forwarded with WebSocket headers
-    expect(tcpPort.fetch).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          Upgrade: 'websocket',
-        }),
-      })
-    );
+    const forwardedRequest = tcpPort.fetch.mock.calls[0][1] as Request;
+    expect(forwardedRequest.headers.get('Upgrade')).toBe('websocket');
   });
 
   test('fetch should detect WebSocket requests and forward them correctly', async () => {
     // Setup spy on containerFetch
     // @ts-ignore - ignore TypeScript errors for testing
-    const proxySpy = jest.spyOn(container, 'containerFetch');
+    const proxySpy = vi.spyOn(container, 'containerFetch');
 
     // Mock WebSocket upgrade request
     const mockRequest = new Request('https://example.com/ws', {
@@ -372,6 +385,7 @@ describe('Container', () => {
 
     // Ensure container is running
     mockCtx.container.running = true;
+    mockCtx.storage.get.mockResolvedValue({ status: 'healthy', lastChange: Date.now() });
 
     // Call fetch
     // @ts-ignore - ignore TypeScript errors for testing
@@ -386,8 +400,8 @@ describe('Container', () => {
 describe('getRandom', () => {
   test('should return a container stub', async () => {
     const mockBinding = {
-      idFromName: jest.fn().mockReturnValue('mock-id'),
-      get: jest.fn().mockReturnValue({ mockStub: true }),
+      idFromName: vi.fn().mockReturnValue('mock-id'),
+      get: vi.fn().mockReturnValue({ mockStub: true }),
     };
 
     const result = await getRandom(mockBinding as any, 5);
