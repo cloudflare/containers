@@ -1700,22 +1700,20 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     waitOptions: WaitOptions,
     options?: ContainerStartConfigOptions
   ): Promise<number> {
-    // Fast path: container is already running. Safe to short-circuit
-    // synchronously since `this.container.running` only flips true after
-    // container.start() returns.
+    // Coalesce concurrent starts: if another caller is already in the start path, join their
+    // outcome instead of racing a second `this.container.start()`. Checked before the running
+    // fast path so callers also join during the post-start()/pre-port-ready window.
+    if (this.startInFlight) {
+      return this.startInFlight;
+    }
+
+    // Fast path: container is already running and no start is in flight.
     if (this.container.running) {
       if (!this.monitor) {
         this.monitor = this.container.monitor();
       }
 
       return 0;
-    }
-
-    // Coalesce concurrent starts. If another caller is already executing
-    // the start path, await their outcome (success or failure) instead of
-    // racing them to a second `this.container.start()` invocation.
-    if (this.startInFlight) {
-      return this.startInFlight;
     }
 
     const startPromise = this.doStartContainer(waitOptions, options);
