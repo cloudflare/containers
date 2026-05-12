@@ -1032,7 +1032,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    * @param error - The error that occurred
    * @returns Can return any value or throw the error
    */
-  public onError(error: unknown): any {
+  public onError(error: unknown): unknown {
     console.error('Container error:', error);
     throw error;
   }
