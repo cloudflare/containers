@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "types": ["@cloudflare/workers-types", "node"],
+    "lib": ["esnext"],
+    "rootDir": "..",
+    "noEmit": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
+  },
+  "include": ["./**/*.ts", "../lib/**/*.ts", "../index.ts", "../types/**/*.ts"],
+  "exclude": ["node_modules"]
+}
