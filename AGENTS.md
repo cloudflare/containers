@@ -63,8 +63,54 @@ Build output goes to `dist/`. Do not edit files in `dist/`.
 **Starting a container:**
 
 - `start(startOptions?, waitOptions?)` — starts without waiting for ports
-- `startAndWaitForPorts(args)` — starts and polls until ports are ready
+- `startAndWaitForPorts(args)` — starts and runs all readiness checks (defaults to port checks)
 - `waitForPort(waitOptions)` — polls a single port; returns tries used
+- `waitForPath(waitOptions & { path })` — polls an HTTP path until it returns 2xx
+
+**Readiness checks:**
+
+Readiness checks gate fetch proxying — every check must resolve before requests flow to the container. All checks run in parallel, so ordering doesn't matter.
+
+Checks should retry internally on transient "not ready yet" conditions rather than rejecting. A rejection is terminal and causes the parent `fetch` to return a 500. Loop cooperatively against `options.signal` (which fires on timeout) and only reject when something is genuinely broken.
+
+`portResponding` checks for `defaultPort` and every entry in `requiredPorts` are added automatically, so you don't need to list them explicitly:
+
+```ts
+import { Container, isHealthy } from '@cloudflare/containers';
+
+class MyApp extends Container {
+  defaultPort = 8080;
+  // portResponding(8080) is added automatically
+  readyOn = [isHealthy('/health')];
+}
+```
+
+Add checks at runtime with `addReadinessCheck` — auto port checks are still applied:
+
+```ts
+// Effective: [portResponding(8080), isHealthy('/ready')]
+container.addReadinessCheck(isHealthy('/ready'));
+
+container.addReadinessCheck(async () => {
+  await warmCachesFromR2();
+});
+```
+
+`setReadinessChecks` takes full control: auto port checks are NOT added, so include them explicitly if you need them. Pass `[]` to opt out entirely.
+
+```ts
+import { portResponding, isHealthy } from '@cloudflare/containers';
+
+// Replace everything — include port checks explicitly
+container.setReadinessChecks([
+  portResponding(8080),
+  isHealthy('/ready'),
+  async () => { await migrateDatabase(); },
+]);
+
+// Opt out — ready as soon as the process starts
+container.setReadinessChecks([]);
+```
 
 **HTTP methods:**
 

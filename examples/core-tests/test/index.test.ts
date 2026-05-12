@@ -131,6 +131,40 @@ describe('core functionality', () => {
       expect(fetchRequestIndex).toBeLessThan(secondOnStartIndex);
     });
 
+    test('readyOn waits for pathHealthy before proxying', async () => {
+      const runner = new WranglerDevRunner();
+
+      const url = await runner.getUrl();
+      const id = randomUUID();
+
+      try {
+        const response = await vi.waitFor(
+          async () => {
+            const res = await fetch(`${url}/readyOn/fetch?id=${id}`);
+            if (res.status !== 200) {
+              console.log(await res.text());
+              throw new Error(`Expected status 200, got ${res.status}`);
+            }
+            return res;
+          },
+          { timeout: 15000 }
+        );
+
+        const payload = (await response.json()) as { status: number; body: string };
+        // If the readiness check passed, the container responded with its
+        // normal message — not the 503 "warming up" response from /health.
+        expect(payload.status).toBe(200);
+        expect(payload.body).toBe(
+          'Hello from test container! process.env.MESSAGE: ready on container'
+        );
+      } finally {
+        await runner.destroy([id]);
+      }
+
+      const output = runner.getStdout();
+      expect(output).toMatch(/readyOn onStart hook called/);
+    });
+
     test('stop', async () => {
       const runner = new WranglerDevRunner();
 
