@@ -827,8 +827,8 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   ): Promise<void> {
     // Parse arguments to handle different overload signatures
     let ports: number | number[] | undefined;
-    let resolvedCancellationOptions: CancellationOptions | undefined = {};
-    let resolvedStartOptions: ContainerStartConfigOptions | undefined = {};
+    let resolvedCancellationOptions: CancellationOptions | undefined;
+    let resolvedStartOptions: ContainerStartConfigOptions | undefined;
 
     if (typeof portsOrArgs === 'object' && portsOrArgs !== null && !Array.isArray(portsOrArgs)) {
       // Object-based overload: { startOptions?, ports?, cancellationOptions? }
@@ -852,7 +852,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     const containerGetTimeout =
       resolvedCancellationOptions.instanceGetTimeoutMS ?? TIMEOUT_TO_GET_CONTAINER_MS;
     const pollInterval = resolvedCancellationOptions.waitInterval ?? INSTANCE_POLL_INTERVAL_MS;
-    let containerGetRetries = Math.ceil(containerGetTimeout / pollInterval);
+    const containerGetRetries = Math.ceil(containerGetTimeout / pollInterval);
 
     const waitOptions: WaitOptions = {
       signal: resolvedCancellationOptions.abort,
@@ -910,7 +910,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       });
     });
     const pollInterval = waitOptions.waitInterval ?? INSTANCE_POLL_INTERVAL_MS;
-    let tries = waitOptions.retries ?? Math.ceil(TIMEOUT_TO_GET_PORTS_MS / pollInterval);
+    const tries = waitOptions.retries ?? Math.ceil(TIMEOUT_TO_GET_PORTS_MS / pollInterval);
 
     // Try to connect to the port multiple times
     for (let i = 0; i < tries; i++) {
@@ -935,7 +935,10 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
                 `Container crashed while checking for ports, did you start the container and setup the entrypoint correctly?`
               )
             );
-          } catch {}
+          } catch {
+            // Intentionally ignore errors from the user-supplied onError handler; the
+            // original error (`e`) is rethrown below regardless.
+          }
 
           throw e;
         }
@@ -946,7 +949,10 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
             await this.onError(
               `Failed to verify port ${port} is available after ${(i + 1) * pollInterval}ms, last error: ${errorMessage}`
             );
-          } catch {}
+          } catch {
+            // Intentionally ignore errors from the user-supplied onError handler; the
+            // original error (`e`) is rethrown below regardless.
+          }
           throw e;
         }
 
@@ -998,8 +1004,9 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    * Override this method in subclasses to handle Container stopped events
    * @param params - Object containing exitCode and reason for the stop
    */
-  public onStop(_: StopParams): void | Promise<void> {
-    // Default implementation does nothing
+  public onStop(params: StopParams): void | Promise<void> {
+    // Default implementation does nothing; subclasses should use `params`.
+    void params;
   }
 
   /**
@@ -1155,7 +1162,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     portParam?: number
   ): Promise<Response> {
     // Parse the arguments based on their types to handle different method signatures
-    let { request, port } = this.requestAndPortFromContainerFetchArgs(
+    const { request, port } = this.requestAndPortFromContainerFetchArgs(
       requestOrUrl,
       portOrInit,
       portParam
@@ -1270,7 +1277,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       }
 
       if (res.body !== null) {
-        let { readable, writable } = new TransformStream();
+        const { readable, writable } = new TransformStream();
         res.body?.pipeTo(writable).finally(() => {
           this.decrementInflight();
         });
@@ -1540,7 +1547,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    */
   private async applyOutboundInterception(): Promise<void> {
     const ctx = this.ctx as unknown as {
-      exports?: { ContainerProxy?: (params: { props: {} }) => Fetcher };
+      exports?: { ContainerProxy?: (params: { props: Record<string, unknown> }) => Fetcher };
     };
     if (ctx.exports === undefined) {
       throw new Error(
@@ -1617,9 +1624,8 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     strings: TemplateStringsArray,
     ...values: (string | number | boolean | null)[]
   ) {
-    let query = '';
     // Construct the SQL query with placeholders
-    query = strings.reduce((acc, str, i) => acc + str + (i < values.length ? '?' : ''), '');
+    const query = strings.reduce((acc, str, i) => acc + str + (i < values.length ? '?' : ''), '');
 
     // Execute the SQL query with the provided values
     return [...this.ctx.storage.sql.exec(query, ...values)] as T[];
@@ -1672,20 +1678,18 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    * 4. Falls back to port 33 if none of the above are set
    */
   private async getPortsToCheck(overridePorts?: number | number[]) {
-    let portsToCheck: number[] = [];
-
     if (overridePorts !== undefined) {
       // Use explicitly provided ports (single port or array)
-      portsToCheck = Array.isArray(overridePorts) ? overridePorts : [overridePorts];
-    } else if (this.requiredPorts && this.requiredPorts.length > 0) {
-      // Use requiredPorts class property if available
-      portsToCheck = [...this.requiredPorts];
-    } else {
-      // Fall back to defaultPort if available
-      portsToCheck = [this.defaultPort ?? FALLBACK_PORT_TO_CHECK];
+      return Array.isArray(overridePorts) ? overridePorts : [overridePorts];
     }
 
-    return portsToCheck;
+    if (this.requiredPorts && this.requiredPorts.length > 0) {
+      // Use requiredPorts class property if available
+      return [...this.requiredPorts];
+    }
+
+    // Fall back to defaultPort if available
+    return [this.defaultPort ?? FALLBACK_PORT_TO_CHECK];
   }
 
   // ===========================================
@@ -1771,13 +1775,19 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
 
           try {
             await this.onError(toThrow);
-          } catch {}
+          } catch {
+            // Intentionally ignore errors from the user-supplied onError handler; the
+            // original error is rethrown below regardless.
+          }
 
           throw toThrow;
         } else if (!isNoInstanceError(err)) {
           try {
             await this.onError(err);
-          } catch {}
+          } catch {
+            // Intentionally ignore errors from the user-supplied onError handler; the
+            // original error is rethrown below regardless.
+          }
 
           throw err;
         }
@@ -1883,7 +1893,9 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
         try {
           // TODO: Be able to retrigger onError
           await this.onError(error);
-        } catch {}
+        } catch {
+          // Intentionally ignore errors from the user-supplied onError handler.
+        }
       })
       .finally(() => {
         this.monitorSetup = false;

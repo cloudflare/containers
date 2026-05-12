@@ -4,7 +4,6 @@ import { getRandom } from '../lib/utils';
 import { MockWebSocket, test, webSocketPairSpy } from './fixtures';
 
 describe('Container', () => {
-
   test('should initialize with default values', ({ container }) => {
     expect(container.defaultPort).toBe(8080);
     expect(container.sleepAfter).toBe('10m');
@@ -58,7 +57,7 @@ describe('Container', () => {
     mockCtx,
     container,
   }) => {
-    using _onErrorSpy = vi.spyOn(container, 'onError').mockImplementation(error => {
+    using onErrorSpy = vi.spyOn(container, 'onError').mockImplementation(error => {
       throw error;
     });
 
@@ -77,6 +76,7 @@ describe('Container', () => {
         cancellationOptions: { instanceGetTimeoutMS: 1, waitInterval: 1 },
       })
     ).rejects.toThrow('you are requesting too many containers per second');
+    expect(onErrorSpy).toHaveBeenCalled();
   });
 
   test('startAndWaitForPorts should abort the durable object on final network loss', async ({

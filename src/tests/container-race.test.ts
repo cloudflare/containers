@@ -65,7 +65,6 @@ describe('Container concurrent-start race (issue #173)', () => {
     );
 
     // Helpful diagnostic dump.
-    // eslint-disable-next-line no-console
     console.log(
       '[repro] start call count:',
       startCallCount,

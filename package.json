@@ -9,7 +9,7 @@
   "scripts": {
     "build": "tsc -p .",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src --ext .ts,.tsx --config .eslintrc.js",
+    "lint": "eslint src",
     "format": "prettier --write \"src/**/*.ts\"",
     "test": "set -e; for fixture in examples/*/; do if [ -d \"$fixture/test\" ] && [ -f \"$fixture/package.json\" ]; then cd \"$fixture\"; npm install; npm run test; cd - > /dev/null; fi; done",
     "test:unit": "vitest run src/tests"
