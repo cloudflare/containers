@@ -11,7 +11,6 @@ export default defineConfig(
       '@typescript-eslint/no-explicit-any': 'warn',
       '@typescript-eslint/explicit-module-boundary-types': 'off',
       '@typescript-eslint/no-unused-expressions': ['error', { allowTaggedTemplates: true }],
-      'preserve-caught-error': 'off',
     },
   },
   {
