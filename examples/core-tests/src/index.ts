@@ -1,5 +1,4 @@
-import { Container } from '../../../src/lib/container';
-import { getContainer, switchPort } from '../../../src/lib/utils';
+import { Container, getContainer, switchPort } from '@cloudflare/containers';
 
 /**
  * Test Container implementation for integration testing

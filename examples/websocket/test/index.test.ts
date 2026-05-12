@@ -1,12 +1,11 @@
-import { WranglerDevRunner } from '../../test-helpers';
-import { describe } from 'vitest';
 import { randomUUID } from 'node:crypto';
+import { describe, expect } from 'vitest';
 import WebSocket from 'ws';
+import { test } from '../../test-helpers';
 
 describe('WebSocket proxy functionality', () => {
   describe('local', async () => {
-    test('container.fetch() can proxy WebSocket connections', async () => {
-      const runner = new WranglerDevRunner();
+    test('container.fetch() can proxy WebSocket connections', async ({ runner }) => {
       const url = await runner.getUrl();
       const id = randomUUID();
 

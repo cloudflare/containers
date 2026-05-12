@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "container-package-class-worker",
+  "name": "containers-timeout-example",
   "main": "src/index.ts",
   "compatibility_date": "2026-05-12",
   "observability": {
@@ -8,23 +8,23 @@
   },
   "containers": [
     {
-      "class_name": "MyContainer",
+      "class_name": "TimeoutContainer",
       "image": "./Dockerfile",
-      "max_instances": 3,
-      "name": "container-package-class-example",
+      "max_instances": 1,
+      "name": "containers-timeout-example",
     },
   ],
   "durable_objects": {
     "bindings": [
       {
-        "class_name": "MyContainer",
-        "name": "MY_CONTAINER",
+        "class_name": "TimeoutContainer",
+        "name": "TIMEOUT_CONTAINER",
       },
     ],
   },
   "migrations": [
     {
-      "new_sqlite_classes": ["MyContainer"],
+      "new_sqlite_classes": ["TimeoutContainer"],
       "tag": "v1",
     },
   ],

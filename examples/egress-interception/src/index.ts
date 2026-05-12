@@ -1,7 +1,6 @@
-// import { Container, getRandom, getContainer } from '@cloudflare/containers'; // in a real Worker
-import { Container, getContainer } from '../../../src/index.js';
-export { ContainerProxy } from '../../../src/index.js';
-import { OutboundHandlerContext } from '../../../src/lib/container.js';
+import { Container, getContainer } from '@cloudflare/containers';
+import type { OutboundHandlerContext } from '@cloudflare/containers';
+export { ContainerProxy } from '@cloudflare/containers';
 
 export class MyContainer extends Container {
   defaultPort = 8080; // The default port for the container to listen on

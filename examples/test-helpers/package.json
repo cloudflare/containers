@@ -1,0 +1,16 @@
+{
+  "name": "containers-test-helpers",
+  "version": "1.0.0",
+  "description": "Shared test helpers for @cloudflare/containers examples",
+  "type": "module",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.19",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6"
+  }
+}

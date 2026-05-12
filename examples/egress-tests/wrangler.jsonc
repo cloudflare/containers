@@ -1,8 +1,7 @@
 {
   "name": "egress-tests",
   "main": "src/index.ts",
-  "compatibility_date": "2026-02-06",
-  "compatibility_flags": ["nodejs_compat", "experimental"],
+  "compatibility_date": "2026-05-12",
   "observability": {
     "enabled": true,
   },

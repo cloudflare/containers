@@ -1,11 +1,11 @@
-import { WranglerDevRunner } from '../../test-helpers';
-import { test, vi } from 'vitest';
+import type { State } from '@cloudflare/containers';
 import { randomUUID } from 'node:crypto';
+import { describe, expect, vi } from 'vitest';
+import { test } from '../../test-helpers';
 
 describe('core functionality', () => {
   describe('local', async () => {
-    test('http fetch (and onStart and onStop hooks)', async () => {
-      const runner = new WranglerDevRunner();
+    test('http fetch (and onStart and onStop hooks)', async ({ runner }) => {
       const url = await runner.getUrl();
       // so each test is to a unique container
       const id = randomUUID();
@@ -31,9 +31,7 @@ describe('core functionality', () => {
       expect(output.match(/onStop hook called/g)).toHaveLength(1);
     });
 
-    test('containerFetch', async () => {
-      const runner = new WranglerDevRunner();
-
+    test('containerFetch', async ({ runner }) => {
       const url = await runner.getUrl();
       const id = randomUUID();
 
@@ -57,33 +55,26 @@ describe('core functionality', () => {
       expect(output.match(/onStart hook called/g)).toHaveLength(1);
     });
 
-    test('containerFetch preserves 204 no content responses', async () => {
-      const runner = new WranglerDevRunner();
-
+    test('containerFetch preserves 204 no content responses', async ({ runner }) => {
       const url = await runner.getUrl();
       const id = randomUUID();
 
-      try {
-        const response = await vi.waitFor(
-          async () => {
-            const res = await fetch(`${url}/containerFetchNoContent?id=${id}`);
-            if (res.status !== 204) {
-              throw new Error(`Expected status 204, got ${res.status}. Body: ${await res.text()}`);
-            }
-            return res;
-          },
-          { timeout: 10000 }
-        );
+      const response = await vi.waitFor(
+        async () => {
+          const res = await fetch(`${url}/containerFetchNoContent?id=${id}`);
+          if (res.status !== 204) {
+            throw new Error(`Expected status 204, got ${res.status}. Body: ${await res.text()}`);
+          }
+          return res;
+        },
+        { timeout: 10000 }
+      );
 
-        expect(await response.text()).toBe('');
-      } finally {
-        await runner.destroy([id]);
-      }
+      expect(await response.text()).toBe('');
+      await runner.destroy([id]);
     });
 
-    test('startAndWaitForPorts', async () => {
-      const runner = new WranglerDevRunner();
-
+    test('startAndWaitForPorts', async ({ runner }) => {
       const url = await runner.getUrl();
       const id = randomUUID();
       await fetch(`${url}/startAndWaitForPorts?id=${id}`);
@@ -102,9 +93,7 @@ describe('core functionality', () => {
       expect(onStartIndex).toBeLessThan(fetchRequestIndex);
     });
 
-    test('start', async () => {
-      const runner = new WranglerDevRunner();
-
+    test('start', async ({ runner }) => {
       const url = await runner.getUrl();
       const id = randomUUID();
 
@@ -131,9 +120,7 @@ describe('core functionality', () => {
       expect(fetchRequestIndex).toBeLessThan(secondOnStartIndex);
     });
 
-    test('stop', async () => {
-      const runner = new WranglerDevRunner();
-
+    test('stop', async ({ runner }) => {
       const url = await runner.getUrl();
       const id = randomUUID();
 
@@ -144,19 +131,20 @@ describe('core functionality', () => {
 
       expect(responseText).toBe('Hello from test container! process.env.MESSAGE: start with start');
       let statusReq = await fetch(`${url}/status?id=${id}`);
-      let status = await statusReq.json();
+      let status = (await statusReq.json()) as State;
       expect(status.status).toBe('healthy');
       await fetch(`${url}/stop?id=${id}`);
       await vi.waitFor(
         async () => {
           statusReq = await fetch(`${url}/status?id=${id}`);
-          status = await statusReq.json();
+          status = (await statusReq.json()) as State;
           expect(status.status).toBe('stopped');
         },
         { timeout: 5000 }
       );
       const output = runner.getStdout();
       expect(output.match(/onStop hook called/g)).toHaveLength(1);
+      // runner cleanup is handled automatically by the fixture.
     });
   });
 

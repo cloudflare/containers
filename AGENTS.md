@@ -131,10 +131,11 @@ npm run build       # tsc compile to dist/
 npm run typecheck   # type check without emitting
 npm run lint        # eslint
 npm run format      # prettier
-npm run test        # runs tests in each examples/*/test directory
+npm run test        # runs integration tests in each examples/*/test directory
+npm run test:unit   # runs unit tests in src/tests/
 ```
 
-Tests live inside `examples/*/test/`. There are no unit tests directly in `src/`. When adding new functionality, check whether the relevant example covers it and add a test there.
+Unit tests live in `src/tests/` (mocked container ctx, no Docker required). Integration tests live in `examples/*/test/` and spawn `wrangler dev` + Docker containers. When adding new functionality, decide which is more appropriate — prefer the unit test if the behavior can be exercised with the mocks in `src/tests/fixtures.ts`; otherwise add or extend an example test.
 
 ## Common Patterns
 
@@ -151,6 +152,18 @@ export { ContainerProxy } from '@cloudflare/containers';
 **Do not override `alarm()`**. Use `schedule()` instead; the internal alarm handler manages container activity timers.
 
 **Error states:** Container state transitions are `stopped → running → healthy → stopping → stopped`. The `stopped_with_code` status carries an exit code.
+
+**Integration tests use the `runner` fixture** from `examples/test-helpers`, which provisions a `WranglerDevRunner` and tears it down automatically when the test resolves:
+
+```ts
+import { test } from '../../test-helpers';
+test('my test', async ({ runner }) => {
+  const url = await runner.getUrl();
+  // ...
+});
+```
+
+Call `runner.destroy([id])` when the test needs to fire the worker's `/destroy?id=<id>` route — for example, to exercise a container's `onStop` hook before the fixture tears wrangler down.
 
 ## Changeset
 

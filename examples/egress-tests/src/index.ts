@@ -1,7 +1,6 @@
-import { Container } from '../../../src/lib/container';
-import { getContainer } from '../../../src/lib/utils';
+import { Container, getContainer } from '@cloudflare/containers';
 
-export { ContainerProxy } from '../../../src/lib/container';
+export { ContainerProxy } from '@cloudflare/containers';
 
 export class EgressTestContainer extends Container {
   defaultPort = 8080;
