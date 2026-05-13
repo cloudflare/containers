@@ -9,7 +9,7 @@ export default defineConfig(
     extends: [js.configs.recommended, tseslint.configs.recommended],
     rules: {
       '@typescript-eslint/no-explicit-any': 'warn',
-      '@typescript-eslint/explicit-module-boundary-types': 'off',
+      '@typescript-eslint/explicit-module-boundary-types': 'warn',
       '@typescript-eslint/no-unused-expressions': ['error', { allowTaggedTemplates: true }],
     },
   },

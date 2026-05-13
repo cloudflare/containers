@@ -14,7 +14,7 @@ export class MockWebSocket {
   send = vi.fn<(data: string | ArrayBuffer) => void>();
   close = vi.fn<(code?: number, reason?: string) => void>();
 
-  addEventListener(type: string, handler: EventHandler) {
+  addEventListener(type: string, handler: EventHandler): void {
     this.eventListeners[type].push(handler);
   }
 }
@@ -28,6 +28,7 @@ export const webSocketPairSpy = vi.fn(function WebSocketPair() {
 
 vi.stubGlobal('WebSocketPair', webSocketPairSpy);
 
+// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export function makeMockCtx() {
   const ctx = {
     storage: {

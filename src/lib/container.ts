@@ -1042,7 +1042,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    *
    * Call this method whenever there is activity on the container
    */
-  public renewActivityTimeout() {
+  public renewActivityTimeout(): void {
     const timeoutInMs = parseTimeExpression(this.sleepAfter) * 1000;
     this.sleepAfterMs = Date.now() + timeoutInMs;
   }
@@ -1907,7 +1907,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       });
   }
 
-  deleteSchedules(name: string) {
+  deleteSchedules(name: string): void {
     this.sql`DELETE FROM container_schedules WHERE callback = ${name}`;
   }
 
