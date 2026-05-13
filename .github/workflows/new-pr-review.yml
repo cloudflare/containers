@@ -1,0 +1,61 @@
+name: New PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  review:
+    # Skip fork PRs — automatic review only runs on internal PRs so the
+    # AI Gateway credentials and write-scoped install token never get
+    # exposed to untrusted contributors.
+    if: github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      # Key on PR number so a force-push cancels nothing in-flight (we
+      # want the reviewer to finish posting comments) but a second push
+      # within the same PR still queues behind the first.
+      group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: false
+    permissions:
+      id-token: write
+      # 'read' so the agent cannot self-modify files even if its prompt
+      # is ignored. NO_PUSH below enforces this at the install-token level
+      # as defense in depth.
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 30 # Some history for context; not the full clone.
+
+      - name: Load review prompt
+        id: prompt
+        run: |
+          {
+            echo 'value<<EOF'
+            echo "You are reviewing PR #${{ github.event.pull_request.number }} on ${{ github.repository }}."
+            echo ""
+            cat .github/bonk_reviewer.md
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Run Bonk
+        uses: ask-bonk/ask-bonk/github@main
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_AI_GATEWAY_ACCOUNT_ID }}
+          CLOUDFLARE_GATEWAY_ID: ${{ secrets.CF_AI_GATEWAY_NAME }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_AI_GATEWAY_TOKEN }}
+        with:
+          model: 'cloudflare-ai-gateway/anthropic/claude-opus-4-7'
+          forks: 'false'
+          permissions: write
+          # The auto-reviewer must never push to PR branches. The prompt
+          # (bonk_reviewer.md) already forbids git write ops, but NO_PUSH
+          # enforces that at the token level so it holds even if the model
+          # ignores the instruction.
+          token_permissions: 'NO_PUSH'
+          prompt: ${{ steps.prompt.outputs.value }}
