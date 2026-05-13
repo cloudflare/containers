@@ -962,7 +962,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
           abortedSignal,
         ]);
         if (waitOptions.signal?.aborted) {
-          throw new Error('Container request aborted.');
+          throw new Error('Container request aborted.', { cause: e });
         }
       }
     }
@@ -1042,7 +1042,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    *
    * Call this method whenever there is activity on the container
    */
-  public renewActivityTimeout() {
+  public renewActivityTimeout(): void {
     const timeoutInMs = parseTimeExpression(this.sleepAfter) * 1000;
     this.sleepAfterMs = Date.now() + timeoutInMs;
   }
@@ -1836,7 +1836,8 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
 
         if (waitOptions.signal?.aborted) {
           throw new Error(
-            'Aborted waiting for container to start as we received a cancellation signal'
+            'Aborted waiting for container to start as we received a cancellation signal',
+            { cause: error }
           );
         }
 
@@ -1854,7 +1855,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
 
           await handleError();
 
-          throw new Error(NO_CONTAINER_INSTANCE_ERROR);
+          throw new Error(NO_CONTAINER_INSTANCE_ERROR, { cause: error });
         }
 
         continue;
@@ -1906,7 +1907,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       });
   }
 
-  deleteSchedules(name: string) {
+  deleteSchedules(name: string): void {
     this.sql`DELETE FROM container_schedules WHERE callback = ${name}`;
   }
 

@@ -4,7 +4,7 @@
  * @param length - The length of the ID to generate (default: 9)
  * @returns A random string ID
  */
-export function generateId(length = 9) {
+export function generateId(length = 9): string {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   const bytes = new Uint8Array(length);
   crypto.getRandomValues(bytes);
