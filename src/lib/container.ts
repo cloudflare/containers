@@ -1920,7 +1920,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    * Executes any scheduled tasks that are due
    */
 
-  override async alarm(alarmProps?: { isRetry: boolean; retryCount: number }): Promise<void> {
+  override async alarm(alarmProps?: AlarmInvocationInfo): Promise<void> {
     if (
       alarmProps !== undefined &&
       alarmProps.isRetry &&
