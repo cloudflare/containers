@@ -1,25 +1,19 @@
 {
-  "name": "containers-core-tests-example",
-  "version": "1.0.0",
-  "description": "Integration test fixture for @cloudflare/containers",
-  "type": "module",
+  "name": "containers-timeout-example",
+  "version": "0.0.1",
   "private": true,
   "scripts": {
     "cf-typegen": "wrangler types",
     "predev": "npm --prefix ../.. run build && npm run cf-typegen",
     "dev": "wrangler dev",
+    "start": "wrangler dev",
     "predeploy": "npm --prefix ../.. run build && npm run cf-typegen",
     "deploy": "wrangler deploy",
     "pretypecheck": "npm --prefix ../.. run build && npm run cf-typegen",
-    "typecheck": "tsc --noEmit",
-    "pretest": "npm --prefix ../.. run build && npm run cf-typegen",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@types/node": "^22.19.19",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.6",
     "wrangler": "^4.90.1"
   },
   "dependencies": {

@@ -1,5 +1,4 @@
-import { Container } from '../../../src/lib/container';
-import { getContainer } from '../../../src/lib/utils';
+import { Container, getContainer } from '@cloudflare/containers';
 
 /**
  * WebSocket Test Container implementation for integration testing

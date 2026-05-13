@@ -1,21 +1,28 @@
 {
-  "name": "egress-tests",
+  "name": "containers-egress-tests-example",
   "version": "1.0.0",
   "description": "Integration tests for egress interception",
   "type": "module",
+  "private": true,
   "scripts": {
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "cf-typegen": "wrangler types",
+    "predev": "npm --prefix ../.. run build && npm run cf-typegen",
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy"
+    "predeploy": "npm --prefix ../.. run build && npm run cf-typegen",
+    "deploy": "wrangler deploy",
+    "pretypecheck": "npm --prefix ../.. run build && npm run cf-typegen",
+    "typecheck": "tsc --noEmit",
+    "pretest": "npm --prefix ../.. run build && npm run cf-typegen",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "typescript": "^5.0.0",
-    "vitest": "^3.0.0",
-    "wrangler": "4.81.0"
+    "@types/node": "^22.19.19",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6",
+    "wrangler": "^4.90.1"
   },
   "dependencies": {
-    "@cloudflare/workers-types": "^4.20260405.1"
+    "@cloudflare/containers": "file:../.."
   }
 }

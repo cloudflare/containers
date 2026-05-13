@@ -4,7 +4,7 @@
     "lib": ["esnext"],
     "module": "esnext",
     "moduleResolution": "bundler",
-    "types": ["./worker-configuration.d.ts"],
+    "types": ["node"],
     "moduleDetection": "force",
     "resolveJsonModule": true,
     "noEmit": true,
@@ -15,5 +15,5 @@
     "strict": true,
     "skipLibCheck": true
   },
-  "include": ["src/**/*.ts"]
+  "include": ["index.ts"]
 }

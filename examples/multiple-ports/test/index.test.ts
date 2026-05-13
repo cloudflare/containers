@@ -1,6 +1,6 @@
-import { WranglerDevRunner } from '../../test-helpers';
-import { test, expect, describe } from 'vitest';
 import { randomUUID } from 'node:crypto';
+import { describe, expect } from 'vitest';
+import { test } from '../../test-helpers';
 
 const fetchOrTimeout = async (fetchPromise: Promise<Response>, timeoutMs: number) => {
   const timeoutPromise = new Promise((_, reject) =>
@@ -10,8 +10,7 @@ const fetchOrTimeout = async (fetchPromise: Promise<Response>, timeoutMs: number
 };
 
 describe('multiple ports functionality', () => {
-  test('waitForPort should wait for port to be ready before returning', async () => {
-    const runner = new WranglerDevRunner();
+  test('waitForPort should wait for port to be ready before returning', async ({ runner }) => {
     const url = await runner.getUrl();
     const id = randomUUID();
 
@@ -44,8 +43,9 @@ describe('multiple ports functionality', () => {
     await runner.destroy([id]);
   });
 
-  test('startAndWaitForPorts should wait for all specified ports to be ready', async () => {
-    const runner = new WranglerDevRunner();
+  test('startAndWaitForPorts should wait for all specified ports to be ready', async ({
+    runner,
+  }) => {
     const url = await runner.getUrl();
     const id = randomUUID();
 

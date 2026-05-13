@@ -1,5 +1,4 @@
-import { Container } from '../../../src/lib/container';
-import { getContainer, getRandom } from '../../../src/lib/utils';
+import { Container, getContainer, getRandom } from '@cloudflare/containers';
 
 export class LoadBalancingContainer extends Container {
   // Default port the container listens on.

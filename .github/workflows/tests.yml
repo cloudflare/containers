@@ -5,56 +5,55 @@ permissions:
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
-  tests:
+  check:
+    name: Lint, format, typecheck, unit tests
     runs-on: ubuntu-latest
-    
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
 
-      - name: Install dependencies and run tests for all fixtures
-        run: npm run test
-        timeout-minutes: 10
-        
-        
-  type-check:
-    runs-on: ubuntu-latest
-    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: 24
           cache: 'npm'
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Run unit tests
+      - name: Lint
+        run: npm run lint
+
+      - name: Format check
+        run: npm run format:check
+
+      - name: Typecheck (root and examples)
+        run: npm run typecheck:all
+
+      - name: Unit tests
         run: npm run test:unit
 
-      - name: Type check all fixtures
-        run: |
-          for fixture in examples/*/; do
-            if [ -f "$fixture/tsconfig.json" ]; then
-              echo "Type checking $fixture"
-              cd "$fixture"
-              npx tsc --noEmit
-              cd - > /dev/null
-            fi
-          done
-        
-      - name: Build Package 
-        run: npm run build
+  examples-integration-tests:
+    name: Examples integration tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run integration tests in each example
+        run: npm run test
+        timeout-minutes: 15

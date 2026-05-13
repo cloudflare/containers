@@ -1,9 +1,9 @@
-import { Container, getContainer } from '../../../src/index.js';
+import { Container, getContainer } from '@cloudflare/containers';
 
 interface Env extends Cloudflare.Env {
+  // Provided via `wrangler secret put`; not declared in `vars` in wrangler.jsonc.
   AWS_ACCESS_KEY_ID: string;
   AWS_SECRET_ACCESS_KEY: string;
-  R2_BUCKET_PREFIX: string;
 }
 
 export class FUSEDemo extends Container<Env> {
