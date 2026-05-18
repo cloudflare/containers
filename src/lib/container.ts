@@ -1141,6 +1141,24 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   // ============
 
   /**
+   * Forward a request to the container only if it is already running and healthy.
+   *
+   * This method never starts the container or waits for ports to become ready.
+   */
+  public async fetchIfRunning(request: Request, port = this.defaultPort): Promise<Response> {
+    if (port === undefined) {
+      throw new Error('No port specified for container fetch');
+    }
+
+    const state = await this.state.getState();
+    if (!this.container.running || state.status !== 'healthy') {
+      return new Response('Container is not running', { status: 503 });
+    }
+
+    return await this.forwardToTcpPort(request, port);
+  }
+
+  /**
    * Send a request to the container (HTTP or WebSocket) using standard fetch API signature
    *
    * This method handles HTTP requests to the container.
@@ -1193,6 +1211,10 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       }
     }
 
+    return await this.forwardToTcpPort(request, port);
+  }
+
+  private async forwardToTcpPort(request: Request, port: number): Promise<Response> {
     const tcpPort = this.container.getTcpPort(port);
 
     // Create URL for the container request

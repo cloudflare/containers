@@ -154,6 +154,71 @@ describe('Container', () => {
     expect(tcpPort.fetch).toHaveBeenCalledWith(expect.any(String), expect.any(Object));
   });
 
+  for (const { name, running, status } of [
+    { name: 'stopped container', running: false, status: 'stopped' },
+    { name: 'running but non-healthy container', running: true, status: 'running' },
+  ] as const) {
+    test(`fetchIfRunning should not start or forward ${name}`, async ({ mockCtx, container }) => {
+      mockCtx.container.running = running;
+      mockCtx.storage.get.mockResolvedValue({ status, lastChange: Date.now() });
+
+      const response = await container.fetchIfRunning(
+        new Request('https://example.com/test'),
+        8080
+      );
+
+      expect(response.status).toBe(503);
+      expect(mockCtx.container.start).not.toHaveBeenCalled();
+      expect(mockCtx.container.getTcpPort).not.toHaveBeenCalled();
+    });
+  }
+
+  test('fetchIfRunning should use default port when port is omitted', async ({
+    mockCtx,
+    container,
+  }) => {
+    mockCtx.container.running = true;
+    mockCtx.storage.get.mockResolvedValue({ status: 'healthy', lastChange: Date.now() });
+
+    const response = await container.fetchIfRunning(new Request('https://example.com/test'));
+
+    expect(response.status).toBe(200);
+    expect(mockCtx.container.getTcpPort).toHaveBeenCalledWith(8080);
+  });
+
+  test('fetchIfRunning should bypass the startup path', async ({ mockCtx, container }) => {
+    using containerFetchSpy = vi.spyOn(container, 'containerFetch');
+    mockCtx.container.running = true;
+    mockCtx.storage.get.mockResolvedValue({ status: 'healthy', lastChange: Date.now() });
+
+    const response = await container.fetchIfRunning(new Request('https://example.com/test'), 8080);
+
+    expect(response.status).toBe(200);
+    expect(containerFetchSpy).not.toHaveBeenCalled();
+    expect(mockCtx.container.start).not.toHaveBeenCalled();
+    expect(mockCtx.container.getTcpPort).toHaveBeenCalledWith(8080);
+  });
+
+  test('fetchIfRunning should forward WebSocket requests', async ({ mockCtx, container }) => {
+    mockCtx.container.running = true;
+    mockCtx.storage.get.mockResolvedValue({ status: 'healthy', lastChange: Date.now() });
+
+    const response = await container.fetchIfRunning(
+      new Request('https://example.com/ws', {
+        headers: new Headers({
+          Upgrade: 'websocket',
+          Connection: 'Upgrade',
+        }),
+      }),
+      8080
+    );
+
+    const tcpPort = mockCtx.container.getTcpPort.mock.results[0].value;
+    expect(tcpPort.fetch).toHaveBeenCalled();
+    expect(webSocketPairSpy).toHaveBeenCalledOnce();
+    expect(response.status).toBe(200);
+  });
+
   test('containerFetch should return 429 when startup is rate limited', async ({ container }) => {
     const mockRequest = new Request('https://example.com/test', { method: 'GET' });
     using startSpy = vi
