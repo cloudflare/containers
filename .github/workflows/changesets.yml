@@ -16,14 +16,14 @@ jobs:
     runs-on: macos-latest-large
     steps:
       - name: Checkout Repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           # See https://github.com/changesets/action/issues/187
           token: ${{ secrets.GH_ACCESS_TOKEN }}
           fetch-depth: 0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: 24
           cache: 'npm'
@@ -36,7 +36,7 @@ jobs:
 
       - name: Create Version PR or Publish to NPM
         id: changesets
-        uses: changesets/action@v1
+        uses: changesets/action@63a615b9cd06ba9a3e6d13796c7fbcb080a60a0b
         with:
           publish: npx changeset publish
         env:

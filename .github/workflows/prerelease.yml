@@ -1,12 +1,12 @@
 name: Publish prereleases
-on: 
+on:
   pull_request:
   push:
     branches:
       - main
       - next
-  
-permissions: 
+
+permissions:
   contents: read
 
 jobs:
@@ -16,10 +16,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: 24
           cache: 'npm'
@@ -27,7 +27,7 @@ jobs:
       - name: Install Dependencies
         run: npm ci
 
-      - name: Build Package 
+      - name: Build Package
         run: npm run build
 
       - run: npx pkg-pr-new publish --comment=update

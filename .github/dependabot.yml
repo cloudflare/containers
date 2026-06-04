@@ -1,0 +1,22 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: '/'
+    versioning-strategy: increase
+
+    schedule:
+      interval: monthly
+
+    # Only accept updates older than a week
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: github-actions
+    directory: '/'
+
+    schedule:
+     interval: monthly
+
+    # Only accept updates older than a week
+    cooldown:
+      default-days: 7
