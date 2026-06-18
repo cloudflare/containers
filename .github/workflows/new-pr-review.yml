@@ -51,6 +51,8 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_AI_GATEWAY_TOKEN }}
         with:
           model: 'cloudflare-ai-gateway/anthropic/claude-opus-4-7'
+          # Creds are broken without pinning opencode.
+          opencode_version: "1.17.7"
           forks: 'false'
           permissions: write
           # The auto-reviewer must never push to PR branches. The prompt
