@@ -1,7 +1,7 @@
 import { describe, expect, test as baseTest, vi } from 'vitest';
 import { Container } from '../lib/container';
 import { getRandom } from '../lib/utils';
-import { MockWebSocket, test, webSocketPairSpy } from './fixtures';
+import { makeMockCtx, MockWebSocket, test, webSocketPairSpy } from './fixtures';
 
 describe('Container', () => {
   test('should initialize with default values', ({ container }) => {
@@ -234,6 +234,8 @@ describe('Container', () => {
     vi.mocked(mockCtx.storage.put).mockClear();
     vi.mocked(mockCtx.storage.setAlarm).mockClear();
     vi.mocked(mockCtx.storage.sync).mockClear();
+    vi.mocked(mockCtx.storage.kv.get).mockClear();
+    vi.mocked(mockCtx.storage.kv.put).mockClear();
     vi.mocked(mockCtx.storage.sql.exec).mockClear();
 
     await container.start(undefined, { portToCheck: 8080, retries: 1, waitInterval: 1 });
@@ -243,6 +245,8 @@ describe('Container', () => {
     expect(mockCtx.storage.get.mock.invocationCallOrder[0]).toBeGreaterThan(startOrder);
     expect(mockCtx.storage.put.mock.invocationCallOrder[0]).toBeGreaterThan(startOrder);
     expect(mockCtx.storage.setAlarm.mock.invocationCallOrder[0]).toBeGreaterThan(startOrder);
+    expect(mockCtx.storage.kv.get.mock.invocationCallOrder[0]).toBeGreaterThan(startOrder);
+    expect(mockCtx.storage.kv.put).not.toHaveBeenCalled();
     expect(mockCtx.storage.sql.exec).not.toHaveBeenCalled();
     expect(mockCtx.storage.sync).not.toHaveBeenCalled();
     expect(mockCtx.storage.put).toHaveBeenCalledWith(
@@ -262,6 +266,7 @@ describe('Container', () => {
     vi.mocked(mockCtx.storage.get).mockClear();
     vi.mocked(mockCtx.storage.put).mockClear();
     vi.mocked(mockCtx.storage.setAlarm).mockClear();
+    vi.mocked(mockCtx.storage.kv.get).mockClear();
 
     await container.containerFetch(new Request('https://example.com/test'));
 
@@ -270,6 +275,60 @@ describe('Container', () => {
     expect(mockCtx.storage.get.mock.invocationCallOrder[0]).toBeGreaterThan(startOrder);
     expect(mockCtx.storage.put.mock.invocationCallOrder[0]).toBeGreaterThan(startOrder);
     expect(mockCtx.storage.setAlarm.mock.invocationCallOrder[0]).toBeGreaterThan(startOrder);
+    expect(mockCtx.storage.kv.get.mock.invocationCallOrder[0]).toBeGreaterThan(startOrder);
+  });
+
+  test('cold start should not touch storage before container.start', async () => {
+    const mockCtx = makeMockCtx();
+    let startCalled = false;
+    const assertStarted = () => {
+      if (!startCalled) {
+        throw new Error('storage called before container.start');
+      }
+    };
+
+    mockCtx.container.start.mockImplementation(() => {
+      startCalled = true;
+      mockCtx.container.running = true;
+    });
+    mockCtx.storage.get.mockImplementation(async () => {
+      assertStarted();
+      return undefined;
+    });
+    mockCtx.storage.put.mockImplementation(async () => {
+      assertStarted();
+    });
+    mockCtx.storage.setAlarm.mockImplementation(async () => {
+      assertStarted();
+    });
+    mockCtx.storage.deleteAlarm.mockImplementation(async () => {
+      assertStarted();
+    });
+    mockCtx.storage.sync.mockImplementation(async () => {
+      assertStarted();
+    });
+    mockCtx.storage.kv.get.mockImplementation(() => {
+      assertStarted();
+      return undefined;
+    });
+    mockCtx.storage.kv.put.mockImplementation(() => {
+      assertStarted();
+    });
+    mockCtx.storage.sql.exec.mockImplementation(() => {
+      assertStarted();
+      return [];
+    });
+    mockCtx.blockConcurrencyWhile.mockImplementation(async fn => {
+      assertStarted();
+      return fn();
+    });
+
+    const container = new Container(mockCtx as never, {});
+    container.defaultPort = 8080;
+
+    await container.start(undefined, { portToCheck: 8080, retries: 1, waitInterval: 1 });
+
+    expect(mockCtx.container.start).toHaveBeenCalledOnce();
   });
 
   test('alarm should not stop a container while its start loop is in flight', async ({

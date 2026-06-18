@@ -43,9 +43,9 @@ export function makeMockCtx() {
       deleteAlarm: vi.fn<(options?: unknown) => Promise<void>>().mockResolvedValue(undefined),
       sync: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
       kv: {
-        get: vi.fn<(key: string) => Promise<unknown>>(),
-        put: vi.fn<(key: string, value: unknown) => Promise<void>>().mockResolvedValue(undefined),
-        delete: vi.fn<(key: string) => Promise<boolean>>().mockResolvedValue(true),
+        get: vi.fn<(key: string) => unknown>(),
+        put: vi.fn<(key: string, value: unknown) => void>(),
+        delete: vi.fn<(key: string) => boolean>().mockReturnValue(true),
       },
       sql: {
         exec: vi.fn<(query: string) => unknown[]>().mockReturnValue([]),

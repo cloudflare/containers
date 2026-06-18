@@ -551,34 +551,9 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       );
     }
 
+    this.container = ctx.container;
     this.state = new ContainerState(this.ctx.storage);
 
-    const persistedOutboundConfiguration = this.restoreOutboundConfiguration();
-    this.ctx.blockConcurrencyWhile(async () => {
-      // Yield so subclass class-field initializers (e.g. `sleepAfter = "2h"`)
-      // run before renewActivityTimeout reads `this.sleepAfter`.
-      await Promise.resolve();
-      this.renewActivityTimeout();
-
-      const ctor = this.constructor as typeof Container;
-      if (
-        persistedOutboundConfiguration !== undefined ||
-        ctor.outboundByHost !== undefined ||
-        ctor.outbound !== undefined ||
-        ctor.outboundHandlers !== undefined ||
-        this.effectiveAllowedHosts !== undefined ||
-        this.effectiveDeniedHosts !== undefined
-      ) {
-        this.usingInterception = true;
-      }
-
-      if (this.container.running) {
-        this.applyOutboundInterceptionPromise = this.applyOutboundInterception();
-        await this.scheduleNextAlarm();
-      }
-    });
-
-    this.container = ctx.container;
     // Apply options if provided
     if (options) {
       if (options.defaultPort !== undefined) this.defaultPort = options.defaultPort;
@@ -587,6 +562,10 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       if (options.entrypoint !== undefined) this.entrypoint = options.entrypoint;
       if (options.enableInternet !== undefined) this.enableInternet = options.enableInternet;
     }
+
+    this.renewActivityTimeout();
+    this.updateUsingInterception();
+
     if (this.container.running) {
       this.monitor = this.container.monitor();
       this.setupMonitorCallbacks();
@@ -803,9 +782,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     this.setupMonitorCallbacks();
 
     // TODO: We should consider an onHealthy callback
-    await this.ctx.blockConcurrencyWhile(async () => {
-      await this.onStart();
-    });
+    await this.onStart();
   }
 
   /**
@@ -852,7 +829,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     }
 
     // Determine which ports to check
-    const portsToCheck = await this.getPortsToCheck(ports);
+    const portsToCheck = this.getPortsToCheck(ports);
 
     // Prepare to start the container
     resolvedCancellationOptions ??= {};
@@ -889,11 +866,9 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
 
     this.setupMonitorCallbacks();
 
-    await this.ctx.blockConcurrencyWhile(async () => {
-      // All ports are ready
-      await this.state.setHealthy();
-      await this.onStart();
-    });
+    // All ports are ready
+    await this.state.setHealthy();
+    await this.onStart();
   }
 
   /**
@@ -1388,6 +1363,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   // The runtime does not expose a way to remove outbound interceptions yet, so
   // once we promote an instance to intercept-all we must keep using it.
   private hasInterceptAllRegistration = false;
+  private outboundConfigurationRestored = false;
 
   // ==========================
   //     GENERAL HELPERS
@@ -1427,12 +1403,37 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     };
   }
 
+  private updateUsingInterception(
+    persistedOutboundConfiguration?: PersistedOutboundConfiguration
+  ): void {
+    const ctor = this.constructor as typeof Container;
+    if (
+      persistedOutboundConfiguration !== undefined ||
+      ctor.outboundByHost !== undefined ||
+      ctor.outbound !== undefined ||
+      ctor.outboundHandlers !== undefined ||
+      this.effectiveAllowedHosts !== undefined ||
+      this.effectiveDeniedHosts !== undefined
+    ) {
+      this.usingInterception = true;
+    }
+  }
+
   private persistOutboundConfiguration(configuration: PersistedOutboundConfiguration): void {
     this.ctx.storage.kv.put(OUTBOUND_CONFIGURATION_KEY, {
       ...configuration,
       allowedHosts: this.allowedHostsOverride,
       deniedHosts: this.deniedHostsOverride,
     });
+  }
+
+  private restoreOutboundConfigurationOnce(): PersistedOutboundConfiguration | undefined {
+    if (this.outboundConfigurationRestored) {
+      return undefined;
+    }
+
+    this.outboundConfigurationRestored = true;
+    return this.restoreOutboundConfiguration();
   }
 
   private restoreOutboundConfiguration(): PersistedOutboundConfiguration | undefined {
@@ -1714,7 +1715,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    * 3. `defaultPort` (if neither of the above is specified)
    * 4. Falls back to port 33 if none of the above are set
    */
-  private async getPortsToCheck(overridePorts?: number | number[]) {
+  private getPortsToCheck(overridePorts?: number | number[]) {
     if (overridePorts !== undefined) {
       // Use explicitly provided ports (single port or array)
       return Array.isArray(overridePorts) ? overridePorts : [overridePorts];
@@ -1847,6 +1848,11 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
         }
         this.container.start(startConfig);
         this.monitor = this.container.monitor();
+        const persistedOutboundConfiguration = this.restoreOutboundConfigurationOnce();
+        this.updateUsingInterception(persistedOutboundConfiguration);
+        if (this.usingInterception) {
+          await this.refreshOutboundInterception();
+        }
         await this.capturePendingStoppedEvent(containerWasRunning);
         await this.state.setRunning();
         await this.scheduleNextAlarm();
