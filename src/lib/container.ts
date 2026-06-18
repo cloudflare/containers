@@ -279,7 +279,7 @@ class ContainerState {
 
   async getState(): Promise<State> {
     if (!this.status) {
-      const state = await this.storage.get<State>(CONTAINER_STATE_KEY);
+      const state = await this.getStoredState();
       if (!state) {
         this.status = {
           status: 'stopped',
@@ -294,6 +294,17 @@ class ContainerState {
     return this.status!;
   }
 
+  async getStoredState(): Promise<State | undefined> {
+    if (!this.status) {
+      const state = await this.storage.get<State>(CONTAINER_STATE_KEY);
+      if (state) {
+        this.status = state;
+      }
+    }
+
+    return this.status;
+  }
+
   private async setStatusAndupdate(status: State['status']) {
     this.status = { status: status, lastChange: Date.now() };
     await this.update();
@@ -301,9 +312,14 @@ class ContainerState {
 
   private async update() {
     if (!this.status) throw new Error('status should be init');
-    await this.storage.put<State>(CONTAINER_STATE_KEY, this.status);
+    await this.storage.put<State>(CONTAINER_STATE_KEY, this.status, { allowUnconfirmed: true });
   }
 }
+
+type PendingStoppedEvent = {
+  params: StopParams;
+  state: State;
+};
 
 type ContainerProxyOptions = {
   enableInternet?: boolean;
@@ -539,10 +555,9 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
 
     const persistedOutboundConfiguration = this.restoreOutboundConfiguration();
     this.ctx.blockConcurrencyWhile(async () => {
-      // First thing, schedule the next alarms. Also yields a microtask
-      // so subclass class-field initializers (e.g. `sleepAfter = "2h"`)
+      // Yield so subclass class-field initializers (e.g. `sleepAfter = "2h"`)
       // run before renewActivityTimeout reads `this.sleepAfter`.
-      await this.scheduleNextAlarm();
+      await Promise.resolve();
       this.renewActivityTimeout();
 
       const ctor = this.constructor as typeof Container;
@@ -559,6 +574,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
 
       if (this.container.running) {
         this.applyOutboundInterceptionPromise = this.applyOutboundInterception();
+        await this.scheduleNextAlarm();
       }
     });
 
@@ -571,20 +587,6 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       if (options.entrypoint !== undefined) this.entrypoint = options.entrypoint;
       if (options.enableInternet !== undefined) this.enableInternet = options.enableInternet;
     }
-
-    // Create schedules table if it doesn't exist
-    this.sql`
-      CREATE TABLE IF NOT EXISTS container_schedules (
-        id TEXT PRIMARY KEY NOT NULL DEFAULT (randomblob(9)),
-        callback TEXT NOT NULL,
-        payload TEXT,
-        type TEXT NOT NULL CHECK(type IN ('scheduled', 'delayed')),
-        time INTEGER NOT NULL,
-        delayInSeconds INTEGER,
-        created_at INTEGER DEFAULT (unixepoch())
-      )
-    `;
-
     if (this.container.running) {
       this.monitor = this.container.monitor();
       this.setupMonitorCallbacks();
@@ -852,9 +854,6 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     // Determine which ports to check
     const portsToCheck = await this.getPortsToCheck(ports);
 
-    // trigger all onStop that we didn't do yet
-    await this.syncPendingStoppedEvents();
-
     // Prepare to start the container
     resolvedCancellationOptions ??= {};
     const containerGetTimeout =
@@ -1084,6 +1083,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     callback: string,
     payload?: T
   ): Promise<Schedule<T>> {
+    this.ensureSchedulesTable();
     const id = generateId(9);
 
     // Ensure the callback is a string (method name)
@@ -1173,8 +1173,13 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       portParam
     );
 
-    const state = await this.state.getState();
-    if (!this.container.running || state.status !== 'healthy') {
+    let isReady = false;
+    if (this.container.running) {
+      const state = await this.state.getState();
+      isReady = state.status === 'healthy';
+    }
+
+    if (!isReady) {
       try {
         await this.startAndWaitForPorts(port, { abort: request.signal });
       } catch (e) {
@@ -1355,6 +1360,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   private onStopCalled = false;
   private state: ContainerState;
   private monitor: Promise<unknown> | undefined;
+  private schedulesTableInitialized = false;
 
   // Coalesces concurrent calls to startContainerIfNotRunning so we never
   // call `this.container.start()` twice. Without this guard, two requests
@@ -1364,6 +1370,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   // throw "start() cannot be called on a container that is already running."
   // See https://github.com/cloudflare/containers/issues/173.
   private startInFlight: Promise<number> | undefined;
+  private pendingStoppedEvent: PendingStoppedEvent | undefined;
 
   private monitoredPromise: Promise<unknown> | undefined;
 
@@ -1528,12 +1535,14 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     return [...hosts];
   }
 
-  private async refreshOutboundInterception(): Promise<void> {
+  private async refreshOutboundInterception(
+    options: { persistOutboundConfiguration?: boolean } = {}
+  ): Promise<void> {
     if (!this.usingInterception) {
       return;
     }
 
-    this.applyOutboundInterceptionPromise = this.applyOutboundInterception();
+    this.applyOutboundInterceptionPromise = this.applyOutboundInterception(options);
     await this.applyOutboundInterceptionPromise;
   }
 
@@ -1550,7 +1559,9 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    * - Intercept-all mode: `interceptOutboundHttps('*', ...)` for all HTTPS traffic
    * - Per-host mode: `interceptOutboundHttps(host, ...)` for each known host
    */
-  private async applyOutboundInterception(): Promise<void> {
+  private async applyOutboundInterception(
+    options: { persistOutboundConfiguration?: boolean } = {}
+  ): Promise<void> {
     const ctx = this.ctx as unknown as {
       exports?: { ContainerProxy?: (params: { props: Record<string, unknown> }) => Fetcher };
     };
@@ -1573,7 +1584,9 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     }
 
     const outboundConfiguration = this.getOutboundConfiguration();
-    this.persistOutboundConfiguration(outboundConfiguration);
+    if (options.persistOutboundConfiguration !== false) {
+      this.persistOutboundConfiguration(outboundConfiguration);
+    }
 
     const hosts = this.getHostsToIntercept();
 
@@ -1625,6 +1638,25 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   /**
    * Execute SQL queries against the Container's database
    */
+  private ensureSchedulesTable(): void {
+    if (this.schedulesTableInitialized) {
+      return;
+    }
+
+    this.sql`
+      CREATE TABLE IF NOT EXISTS container_schedules (
+        id TEXT PRIMARY KEY NOT NULL DEFAULT (randomblob(9)),
+        callback TEXT NOT NULL,
+        payload TEXT,
+        type TEXT NOT NULL CHECK(type IN ('scheduled', 'delayed')),
+        time INTEGER NOT NULL,
+        delayInSeconds INTEGER,
+        created_at INTEGER DEFAULT (unixepoch())
+      )
+    `;
+    this.schedulesTableInitialized = true;
+  }
+
   private sql<T = Record<string, string | number | boolean | null>>(
     strings: TemplateStringsArray,
     ...values: (string | number | boolean | null)[]
@@ -1736,6 +1768,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       if (this.startInFlight === startPromise) {
         this.startInFlight = undefined;
       }
+      await this.drainPendingStoppedEvent();
     }
   }
 
@@ -1807,13 +1840,16 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
         await handleError();
       }
 
-      await this.scheduleNextAlarm();
-
-      if (!this.container.running) {
-        await this.refreshOutboundInterception();
+      const containerWasRunning = this.container.running;
+      if (!containerWasRunning) {
+        if (this.usingInterception) {
+          await this.refreshOutboundInterception({ persistOutboundConfiguration: false });
+        }
         this.container.start(startConfig);
         this.monitor = this.container.monitor();
+        await this.capturePendingStoppedEvent(containerWasRunning);
         await this.state.setRunning();
+        await this.scheduleNextAlarm();
       } else {
         await this.scheduleNextAlarm();
       }
@@ -1944,6 +1980,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   }
 
   deleteSchedules(name: string): void {
+    this.ensureSchedulesTable();
     this.sql`DELETE FROM container_schedules WHERE callback = ${name}`;
   }
 
@@ -1957,6 +1994,8 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    */
 
   override async alarm(alarmProps?: AlarmInvocationInfo): Promise<void> {
+    this.ensureSchedulesTable();
+
     if (
       alarmProps !== undefined &&
       alarmProps.isRetry &&
@@ -1976,8 +2015,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     //  1. The container is not running anymore.
     //  2. Activity expired and it exits.
     const prevAlarm = Date.now();
-    await this.ctx.storage.setAlarm(prevAlarm);
-    await this.ctx.storage.sync();
+    await this.ctx.storage.setAlarm(prevAlarm, { allowUnconfirmed: true });
 
     // Get all schedules that should be executed now
     const result = this.sql<{
@@ -2038,9 +2076,9 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       await this.syncPendingStoppedEvents();
 
       if (resultForMinTime.length == 0) {
-        await this.ctx.storage.deleteAlarm();
+        await this.ctx.storage.deleteAlarm({ allowUnconfirmed: true });
       } else {
-        await this.ctx.storage.setAlarm(minTimeFromSchedules);
+        await this.ctx.storage.setAlarm(minTimeFromSchedules, { allowUnconfirmed: true });
       }
 
       return;
@@ -2071,7 +2109,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       }, timeout);
     });
 
-    await this.ctx.storage.setAlarm(Date.now());
+    await this.ctx.storage.setAlarm(Date.now(), { allowUnconfirmed: true });
 
     // we exit and we have another alarm,
     // the next alarm is the one that decides if it should stop the loop.
@@ -2092,6 +2130,39 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       await this.callOnStop({ exitCode: state.exitCode ?? 0, reason: 'exit' }, state);
       return;
     }
+  }
+
+  private async capturePendingStoppedEvent(containerWasRunning: boolean): Promise<void> {
+    if (containerWasRunning) {
+      return;
+    }
+
+    const state = await this.state.getStoredState();
+    if (!state) {
+      return;
+    }
+
+    if (state.status === 'healthy' || state.status === 'running') {
+      this.pendingStoppedEvent = { params: { exitCode: 0, reason: 'exit' }, state };
+      return;
+    }
+
+    if (state.status === 'stopped_with_code') {
+      this.pendingStoppedEvent = {
+        params: { exitCode: state.exitCode ?? 0, reason: 'exit' },
+        state,
+      };
+    }
+  }
+
+  private async drainPendingStoppedEvent(): Promise<void> {
+    if (!this.pendingStoppedEvent) {
+      return;
+    }
+
+    const event = this.pendingStoppedEvent;
+    this.pendingStoppedEvent = undefined;
+    await this.callOnStop(event.params, event.state);
   }
 
   private async callOnStop(onStopParams: StopParams, stateBeforeOnStop: State) {
@@ -2124,11 +2195,12 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       clearTimeout(this.timeout);
     }
 
-    await this.ctx.storage.setAlarm(nextTime);
-    await this.ctx.storage.sync();
+    await this.ctx.storage.setAlarm(nextTime, { allowUnconfirmed: true });
   }
 
   async listSchedules<T = string>(name: string): Promise<Schedule<T>[]> {
+    this.ensureSchedulesTable();
+
     const result = this.sql<ScheduleSQL>`
       SELECT * FROM container_schedules WHERE callback = ${name} LIMIT 1
     `;
@@ -2176,6 +2248,8 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    * @returns The Schedule object or undefined if not found
    */
   async getSchedule<T = string>(id: string): Promise<Schedule<T> | undefined> {
+    this.ensureSchedulesTable();
+
     const result = this.sql<ScheduleSQL>`
       SELECT * FROM container_schedules WHERE id = ${id} LIMIT 1
     `;

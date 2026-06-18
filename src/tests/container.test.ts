@@ -100,7 +100,8 @@ describe('Container', () => {
     expect(onErrorSpy).toHaveBeenCalled();
     expect(mockCtx.storage.put).toHaveBeenCalledWith(
       '__CF_CONTAINER_STATE',
-      expect.objectContaining({ status: 'stopped' })
+      expect.objectContaining({ status: 'stopped' }),
+      { allowUnconfirmed: true }
     );
   });
 
@@ -129,7 +130,8 @@ describe('Container', () => {
     expect(mockCtx.abort).toHaveBeenCalled();
     expect(mockCtx.storage.put).toHaveBeenCalledWith(
       '__CF_CONTAINER_STATE',
-      expect.objectContaining({ status: 'stopped' })
+      expect.objectContaining({ status: 'stopped' }),
+      { allowUnconfirmed: true }
     );
   });
 
@@ -152,7 +154,8 @@ describe('Container', () => {
     await vi.waitFor(() => {
       expect(mockCtx.storage.put).toHaveBeenCalledWith(
         '__CF_CONTAINER_STATE',
-        expect.objectContaining({ status: 'stopped' })
+        expect.objectContaining({ status: 'stopped' }),
+        { allowUnconfirmed: true }
       );
     });
   });
@@ -175,7 +178,8 @@ describe('Container', () => {
     await vi.waitFor(() => {
       expect(mockCtx.storage.put).toHaveBeenCalledWith(
         '__CF_CONTAINER_STATE',
-        expect.objectContaining({ status: 'stopped' })
+        expect.objectContaining({ status: 'stopped' }),
+        { allowUnconfirmed: true }
       );
       expect(onErrorSpy).toHaveBeenCalledWith(
         expect.objectContaining({ message: 'container supervisor failed' })
@@ -205,7 +209,8 @@ describe('Container', () => {
 
     expect(mockCtx.storage.put).not.toHaveBeenCalledWith(
       '__CF_CONTAINER_STATE',
-      expect.objectContaining({ status: 'stopped_with_code' })
+      expect.objectContaining({ status: 'stopped_with_code' }),
+      { allowUnconfirmed: true }
     );
   });
 
@@ -221,6 +226,52 @@ describe('Container', () => {
     expect(mockCtx.container.getTcpPort).toHaveBeenCalledWith(33);
   });
 
+  test('start should call container.start before storage and alarm writes', async ({
+    mockCtx,
+    container,
+  }) => {
+    vi.mocked(mockCtx.storage.get).mockClear();
+    vi.mocked(mockCtx.storage.put).mockClear();
+    vi.mocked(mockCtx.storage.setAlarm).mockClear();
+    vi.mocked(mockCtx.storage.sync).mockClear();
+    vi.mocked(mockCtx.storage.sql.exec).mockClear();
+
+    await container.start(undefined, { portToCheck: 8080, retries: 1, waitInterval: 1 });
+
+    const startOrder = mockCtx.container.start.mock.invocationCallOrder[0];
+    expect(startOrder).toBeDefined();
+    expect(mockCtx.storage.get.mock.invocationCallOrder[0]).toBeGreaterThan(startOrder);
+    expect(mockCtx.storage.put.mock.invocationCallOrder[0]).toBeGreaterThan(startOrder);
+    expect(mockCtx.storage.setAlarm.mock.invocationCallOrder[0]).toBeGreaterThan(startOrder);
+    expect(mockCtx.storage.sql.exec).not.toHaveBeenCalled();
+    expect(mockCtx.storage.sync).not.toHaveBeenCalled();
+    expect(mockCtx.storage.put).toHaveBeenCalledWith(
+      '__CF_CONTAINER_STATE',
+      expect.objectContaining({ status: 'running' }),
+      { allowUnconfirmed: true }
+    );
+    expect(mockCtx.storage.setAlarm).toHaveBeenCalledWith(expect.any(Number), {
+      allowUnconfirmed: true,
+    });
+  });
+
+  test('containerFetch should start before reading state on cold start', async ({
+    mockCtx,
+    container,
+  }) => {
+    vi.mocked(mockCtx.storage.get).mockClear();
+    vi.mocked(mockCtx.storage.put).mockClear();
+    vi.mocked(mockCtx.storage.setAlarm).mockClear();
+
+    await container.containerFetch(new Request('https://example.com/test'));
+
+    const startOrder = mockCtx.container.start.mock.invocationCallOrder[0];
+    expect(startOrder).toBeDefined();
+    expect(mockCtx.storage.get.mock.invocationCallOrder[0]).toBeGreaterThan(startOrder);
+    expect(mockCtx.storage.put.mock.invocationCallOrder[0]).toBeGreaterThan(startOrder);
+    expect(mockCtx.storage.setAlarm.mock.invocationCallOrder[0]).toBeGreaterThan(startOrder);
+  });
+
   test('alarm should not stop a container while its start loop is in flight', async ({
     mockCtx,
     container,
@@ -229,9 +280,17 @@ describe('Container', () => {
     const startBlockedBeforePhysicalStart = new Promise<void>(resolve => {
       resumeStart = resolve;
     });
-    vi.spyOn(container, 'scheduleNextAlarm').mockImplementationOnce(
-      () => startBlockedBeforePhysicalStart
-    );
+    container.usingInterception = true;
+    const refreshSpy = vi
+      .spyOn(
+        container as unknown as {
+          refreshOutboundInterception(options?: {
+            persistOutboundConfiguration?: boolean;
+          }): Promise<void>;
+        },
+        'refreshOutboundInterception'
+      )
+      .mockImplementationOnce(() => startBlockedBeforePhysicalStart);
     using onStopSpy = vi.spyOn(container, 'onStop');
 
     const startPromise = container.start(undefined, {
@@ -240,7 +299,7 @@ describe('Container', () => {
       waitInterval: 1,
     });
     await vi.waitFor(() => {
-      expect(container.scheduleNextAlarm).toHaveBeenCalled();
+      expect(refreshSpy).toHaveBeenCalled();
     });
     expect(mockCtx.container.start).not.toHaveBeenCalled();
 
@@ -268,7 +327,8 @@ describe('Container', () => {
     expect(onStopSpy).toHaveBeenCalledWith({ exitCode: 0, reason: 'exit' });
     expect(mockCtx.storage.put).toHaveBeenCalledWith(
       '__CF_CONTAINER_STATE',
-      expect.objectContaining({ status: 'stopped' })
+      expect.objectContaining({ status: 'stopped' }),
+      { allowUnconfirmed: true }
     );
   });
 
