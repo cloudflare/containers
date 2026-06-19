@@ -26,7 +26,6 @@ const RUNTIME_SIGNALLED_ERROR = 'runtime signalled the container to exit:';
 const UNEXPECTED_EXIT_ERROR = 'container exited with unexpected exit code:';
 const NOT_LISTENING_ERROR = 'the container is not listening';
 const CONTAINER_STATE_KEY = '__CF_CONTAINER_STATE';
-const OUTBOUND_CONFIGURATION_KEY = 'OUTBOUND_CONFIGURATION';
 
 // maxRetries before scheduling next alarm is purposely set to 3,
 // as according to DO docs at https://developers.cloudflare.com/durable-objects/api/alarms/
@@ -316,11 +315,6 @@ class ContainerState {
   }
 }
 
-type PendingStoppedEvent = {
-  params: StopParams;
-  state: State;
-};
-
 type ContainerProxyOptions = {
   enableInternet?: boolean;
   containerId: string;
@@ -334,7 +328,7 @@ type ContainerProxyOptions = {
   interceptAll?: boolean;
 };
 
-type PersistedOutboundConfiguration = Pick<
+type OutboundConfiguration = Pick<
   ContainerProxyOptions,
   'outboundByHostOverrides' | 'outboundHandlerOverride' | 'allowedHosts' | 'deniedHosts'
 > & {
@@ -1345,7 +1339,6 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   // throw "start() cannot be called on a container that is already running."
   // See https://github.com/cloudflare/containers/issues/173.
   private startInFlight: Promise<number> | undefined;
-  private pendingStoppedEvent: PendingStoppedEvent | undefined;
 
   private monitoredPromise: Promise<unknown> | undefined;
 
@@ -1363,8 +1356,6 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   // The runtime does not expose a way to remove outbound interceptions yet, so
   // once we promote an instance to intercept-all we must keep using it.
   private hasInterceptAllRegistration = false;
-  private outboundConfigurationRestored = false;
-
   // ==========================
   //     GENERAL HELPERS
   // ==========================
@@ -1390,7 +1381,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     return this.deniedHostsOverride ?? this.deniedHosts;
   }
 
-  private getOutboundConfiguration(): PersistedOutboundConfiguration {
+  private getOutboundConfiguration(): OutboundConfiguration {
     return {
       outboundByHostOverrides:
         Object.keys(this.outboundByHostOverrides).length > 0
@@ -1404,11 +1395,11 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   }
 
   private updateUsingInterception(
-    persistedOutboundConfiguration?: PersistedOutboundConfiguration
+    outboundConfiguration?: OutboundConfiguration
   ): void {
     const ctor = this.constructor as typeof Container;
     if (
-      persistedOutboundConfiguration !== undefined ||
+      outboundConfiguration !== undefined ||
       ctor.outboundByHost !== undefined ||
       ctor.outbound !== undefined ||
       ctor.outboundHandlers !== undefined ||
@@ -1417,67 +1408,6 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     ) {
       this.usingInterception = true;
     }
-  }
-
-  private persistOutboundConfiguration(configuration: PersistedOutboundConfiguration): void {
-    this.ctx.storage.kv.put(OUTBOUND_CONFIGURATION_KEY, {
-      ...configuration,
-      allowedHosts: this.allowedHostsOverride,
-      deniedHosts: this.deniedHostsOverride,
-    });
-  }
-
-  private restoreOutboundConfigurationOnce(): PersistedOutboundConfiguration | undefined {
-    if (this.outboundConfigurationRestored) {
-      return undefined;
-    }
-
-    this.outboundConfigurationRestored = true;
-    return this.restoreOutboundConfiguration();
-  }
-
-  private restoreOutboundConfiguration(): PersistedOutboundConfiguration | undefined {
-    const configuration = this.ctx.storage.kv.get<PersistedOutboundConfiguration>(
-      OUTBOUND_CONFIGURATION_KEY
-    );
-
-    if (!configuration) {
-      return undefined;
-    }
-
-    this.outboundHandlerOverride = undefined;
-    if (configuration.outboundHandlerOverride !== undefined) {
-      try {
-        this.validateOutboundHandlerMethodName(configuration.outboundHandlerOverride.method);
-        this.outboundHandlerOverride = configuration.outboundHandlerOverride;
-      } catch (error) {
-        console.warn('Ignoring invalid persisted outbound handler override:', error);
-      }
-    }
-
-    this.outboundByHostOverrides = {};
-    for (const [hostname, override] of Object.entries(
-      configuration.outboundByHostOverrides ?? {}
-    )) {
-      try {
-        this.validateOutboundHandlerMethodName(override.method);
-        this.outboundByHostOverrides[hostname] = override;
-      } catch (error) {
-        console.warn(`Ignoring invalid persisted outbound override for ${hostname}:`, error);
-      }
-    }
-
-    this.hasInterceptAllRegistration = configuration.hasInterceptAllRegistration === true;
-
-    if (configuration.allowedHosts) {
-      this.allowedHostsOverride = configuration.allowedHosts;
-    }
-
-    if (configuration.deniedHosts) {
-      this.deniedHostsOverride = configuration.deniedHosts;
-    }
-
-    return this.getOutboundConfiguration();
   }
 
   /**
@@ -1536,14 +1466,12 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     return [...hosts];
   }
 
-  private async refreshOutboundInterception(
-    options: { persistOutboundConfiguration?: boolean } = {}
-  ): Promise<void> {
+  private async refreshOutboundInterception(): Promise<void> {
     if (!this.usingInterception) {
       return;
     }
 
-    this.applyOutboundInterceptionPromise = this.applyOutboundInterception(options);
+    this.applyOutboundInterceptionPromise = this.applyOutboundInterception();
     await this.applyOutboundInterceptionPromise;
   }
 
@@ -1560,9 +1488,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    * - Intercept-all mode: `interceptOutboundHttps('*', ...)` for all HTTPS traffic
    * - Per-host mode: `interceptOutboundHttps(host, ...)` for each known host
    */
-  private async applyOutboundInterception(
-    options: { persistOutboundConfiguration?: boolean } = {}
-  ): Promise<void> {
+  private async applyOutboundInterception(): Promise<void> {
     const ctx = this.ctx as unknown as {
       exports?: { ContainerProxy?: (params: { props: Record<string, unknown> }) => Fetcher };
     };
@@ -1585,9 +1511,6 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     }
 
     const outboundConfiguration = this.getOutboundConfiguration();
-    if (options.persistOutboundConfiguration !== false) {
-      this.persistOutboundConfiguration(outboundConfiguration);
-    }
 
     const hosts = this.getHostsToIntercept();
 
@@ -1769,7 +1692,6 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       if (this.startInFlight === startPromise) {
         this.startInFlight = undefined;
       }
-      await this.drainPendingStoppedEvent();
     }
   }
 
@@ -1844,16 +1766,10 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       const containerWasRunning = this.container.running;
       if (!containerWasRunning) {
         if (this.usingInterception) {
-          await this.refreshOutboundInterception({ persistOutboundConfiguration: false });
+          await this.refreshOutboundInterception();
         }
         this.container.start(startConfig);
         this.monitor = this.container.monitor();
-        const persistedOutboundConfiguration = this.restoreOutboundConfigurationOnce();
-        this.updateUsingInterception(persistedOutboundConfiguration);
-        if (this.usingInterception) {
-          await this.refreshOutboundInterception();
-        }
-        await this.capturePendingStoppedEvent(containerWasRunning);
         await this.state.setRunning();
         await this.scheduleNextAlarm();
       } else {
@@ -2136,39 +2052,6 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       await this.callOnStop({ exitCode: state.exitCode ?? 0, reason: 'exit' }, state);
       return;
     }
-  }
-
-  private async capturePendingStoppedEvent(containerWasRunning: boolean): Promise<void> {
-    if (containerWasRunning) {
-      return;
-    }
-
-    const state = await this.state.getStoredState();
-    if (!state) {
-      return;
-    }
-
-    if (state.status === 'healthy' || state.status === 'running') {
-      this.pendingStoppedEvent = { params: { exitCode: 0, reason: 'exit' }, state };
-      return;
-    }
-
-    if (state.status === 'stopped_with_code') {
-      this.pendingStoppedEvent = {
-        params: { exitCode: state.exitCode ?? 0, reason: 'exit' },
-        state,
-      };
-    }
-  }
-
-  private async drainPendingStoppedEvent(): Promise<void> {
-    if (!this.pendingStoppedEvent) {
-      return;
-    }
-
-    const event = this.pendingStoppedEvent;
-    this.pendingStoppedEvent = undefined;
-    await this.callOnStop(event.params, event.state);
   }
 
   private async callOnStop(onStopParams: StopParams, stateBeforeOnStop: State) {

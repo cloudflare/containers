@@ -242,10 +242,10 @@ describe('Container', () => {
 
     const startOrder = mockCtx.container.start.mock.invocationCallOrder[0];
     expect(startOrder).toBeDefined();
-    expect(mockCtx.storage.get.mock.invocationCallOrder[0]).toBeGreaterThan(startOrder);
+    expect(mockCtx.storage.get).not.toHaveBeenCalled();
     expect(mockCtx.storage.put.mock.invocationCallOrder[0]).toBeGreaterThan(startOrder);
     expect(mockCtx.storage.setAlarm.mock.invocationCallOrder[0]).toBeGreaterThan(startOrder);
-    expect(mockCtx.storage.kv.get.mock.invocationCallOrder[0]).toBeGreaterThan(startOrder);
+    expect(mockCtx.storage.kv.get).not.toHaveBeenCalled();
     expect(mockCtx.storage.kv.put).not.toHaveBeenCalled();
     expect(mockCtx.storage.sql.exec).not.toHaveBeenCalled();
     expect(mockCtx.storage.sync).not.toHaveBeenCalled();
@@ -267,15 +267,17 @@ describe('Container', () => {
     vi.mocked(mockCtx.storage.put).mockClear();
     vi.mocked(mockCtx.storage.setAlarm).mockClear();
     vi.mocked(mockCtx.storage.kv.get).mockClear();
+    vi.mocked(mockCtx.storage.kv.put).mockClear();
 
     await container.containerFetch(new Request('https://example.com/test'));
 
     const startOrder = mockCtx.container.start.mock.invocationCallOrder[0];
     expect(startOrder).toBeDefined();
-    expect(mockCtx.storage.get.mock.invocationCallOrder[0]).toBeGreaterThan(startOrder);
+    expect(mockCtx.storage.get).not.toHaveBeenCalled();
     expect(mockCtx.storage.put.mock.invocationCallOrder[0]).toBeGreaterThan(startOrder);
     expect(mockCtx.storage.setAlarm.mock.invocationCallOrder[0]).toBeGreaterThan(startOrder);
-    expect(mockCtx.storage.kv.get.mock.invocationCallOrder[0]).toBeGreaterThan(startOrder);
+    expect(mockCtx.storage.kv.get).not.toHaveBeenCalled();
+    expect(mockCtx.storage.kv.put).not.toHaveBeenCalled();
   });
 
   test('cold start should not touch storage before container.start', async () => {
@@ -325,10 +327,25 @@ describe('Container', () => {
 
     const container = new Container(mockCtx as never, {});
     container.defaultPort = 8080;
+    container.allowedHosts = ['example.com'];
+    container.usingInterception = true;
 
     await container.start(undefined, { portToCheck: 8080, retries: 1, waitInterval: 1 });
 
     expect(mockCtx.container.start).toHaveBeenCalledOnce();
+    expect(mockCtx.container.interceptAllOutboundHttp).toHaveBeenCalled();
+  });
+
+  test('cold start should not call onStop for a prior stored run', async ({
+    mockCtx,
+    container,
+  }) => {
+    mockCtx.storage.get.mockResolvedValue({ status: 'running', lastChange: Date.now() });
+    using onStopSpy = vi.spyOn(container, 'onStop');
+
+    await container.startAndWaitForPorts(8080);
+
+    expect(onStopSpy).not.toHaveBeenCalled();
   });
 
   test('alarm should not stop a container while its start loop is in flight', async ({
@@ -343,9 +360,7 @@ describe('Container', () => {
     const refreshSpy = vi
       .spyOn(
         container as unknown as {
-          refreshOutboundInterception(options?: {
-            persistOutboundConfiguration?: boolean;
-          }): Promise<void>;
+          refreshOutboundInterception(): Promise<void>;
         },
         'refreshOutboundInterception'
       )
