@@ -24,7 +24,7 @@ const NO_CONTAINER_INSTANCE_ERROR =
 const RATE_LIMITED_ERROR = 'you are requesting too many containers per second';
 const RUNTIME_SIGNALLED_ERROR = 'runtime signalled the container to exit:';
 const UNEXPECTED_EXIT_ERROR = 'container exited with unexpected exit code:';
-const NOT_LISTENING_ERROR = 'the container is not listening';
+const NOT_LISTENING_ERROR = 'container is not listening';
 const CONTAINER_STATE_KEY = '__CF_CONTAINER_STATE';
 const OUTBOUND_CONFIGURATION_KEY = 'OUTBOUND_CONFIGURATION';
 
