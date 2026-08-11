@@ -312,6 +312,21 @@ describe('Container', () => {
     expect(tcpPort.fetch).toHaveBeenCalledWith(expect.any(String), expect.any(Object));
   });
 
+  describe('relative URL requests', () => {
+    test('accepts a relative URL documented by the public API', async ({ mockCtx, container }) => {
+      mockCtx.container.running = true;
+      mockCtx.storage.get.mockResolvedValue({ status: 'healthy', lastChange: Date.now() });
+
+      await container.containerFetch('/api/data');
+
+      const tcpPort = mockCtx.container.getTcpPort.mock.results[0].value;
+      expect(tcpPort.fetch).toHaveBeenCalledWith(
+        'http://container/api/data',
+        expect.objectContaining({ url: 'http://container/api/data' })
+      );
+    });
+  });
+
   test('containerFetch should return 429 when startup is rate limited', async ({ container }) => {
     const mockRequest = new Request('https://example.com/test', { method: 'GET' });
     using startSpy = vi
