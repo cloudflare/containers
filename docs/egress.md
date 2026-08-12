@@ -188,7 +188,13 @@ MyContainer.outboundHandlers = {
 ## Runtime methods
 
 These methods modify the outbound configuration of a running container
-instance. Changes are persisted across Durable Object restarts.
+instance. Per-instance runtime egress configuration is not persisted by the
+`Container` class. Once configured, it remains active for the current running
+container and will not be lost until that container exits.
+
+If you need runtime egress configuration to survive a container exit, persist
+your desired configuration in your own storage and reapply it with the
+`onStart()` hook or in the constructor.
 
 | Method                                         | Description                                                  |
 | ---------------------------------------------- | ------------------------------------------------------------ |

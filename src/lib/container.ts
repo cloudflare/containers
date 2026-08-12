@@ -26,7 +26,6 @@ const RUNTIME_SIGNALLED_ERROR = 'runtime signalled the container to exit:';
 const UNEXPECTED_EXIT_ERROR = 'container exited with unexpected exit code:';
 const NOT_LISTENING_ERROR = 'the container is not listening';
 const CONTAINER_STATE_KEY = '__CF_CONTAINER_STATE';
-const OUTBOUND_CONFIGURATION_KEY = 'OUTBOUND_CONFIGURATION';
 
 // maxRetries before scheduling next alarm is purposely set to 3,
 // as according to DO docs at https://developers.cloudflare.com/durable-objects/api/alarms/
@@ -279,7 +278,7 @@ class ContainerState {
 
   async getState(): Promise<State> {
     if (!this.status) {
-      const state = await this.storage.get<State>(CONTAINER_STATE_KEY);
+      const state = await this.getStoredState();
       if (!state) {
         this.status = {
           status: 'stopped',
@@ -294,6 +293,17 @@ class ContainerState {
     return this.status!;
   }
 
+  async getStoredState(): Promise<State | undefined> {
+    if (!this.status) {
+      const state = await this.storage.get<State>(CONTAINER_STATE_KEY);
+      if (state) {
+        this.status = state;
+      }
+    }
+
+    return this.status;
+  }
+
   private async setStatusAndupdate(status: State['status']) {
     this.status = { status: status, lastChange: Date.now() };
     await this.update();
@@ -301,7 +311,7 @@ class ContainerState {
 
   private async update() {
     if (!this.status) throw new Error('status should be init');
-    await this.storage.put<State>(CONTAINER_STATE_KEY, this.status);
+    await this.storage.put<State>(CONTAINER_STATE_KEY, this.status, { allowUnconfirmed: true });
   }
 }
 
@@ -318,7 +328,7 @@ type ContainerProxyOptions = {
   interceptAll?: boolean;
 };
 
-type PersistedOutboundConfiguration = Pick<
+type OutboundConfiguration = Pick<
   ContainerProxyOptions,
   'outboundByHostOverrides' | 'outboundHandlerOverride' | 'allowedHosts' | 'deniedHosts'
 > & {
@@ -535,34 +545,9 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       );
     }
 
+    this.container = ctx.container;
     this.state = new ContainerState(this.ctx.storage);
 
-    const persistedOutboundConfiguration = this.restoreOutboundConfiguration();
-    this.ctx.blockConcurrencyWhile(async () => {
-      // First thing, schedule the next alarms. Also yields a microtask
-      // so subclass class-field initializers (e.g. `sleepAfter = "2h"`)
-      // run before renewActivityTimeout reads `this.sleepAfter`.
-      await this.scheduleNextAlarm();
-      this.renewActivityTimeout();
-
-      const ctor = this.constructor as typeof Container;
-      if (
-        persistedOutboundConfiguration !== undefined ||
-        ctor.outboundByHost !== undefined ||
-        ctor.outbound !== undefined ||
-        ctor.outboundHandlers !== undefined ||
-        this.effectiveAllowedHosts !== undefined ||
-        this.effectiveDeniedHosts !== undefined
-      ) {
-        this.usingInterception = true;
-      }
-
-      if (this.container.running) {
-        this.applyOutboundInterceptionPromise = this.applyOutboundInterception();
-      }
-    });
-
-    this.container = ctx.container;
     // Apply options if provided
     if (options) {
       if (options.defaultPort !== undefined) this.defaultPort = options.defaultPort;
@@ -572,18 +557,8 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       if (options.enableInternet !== undefined) this.enableInternet = options.enableInternet;
     }
 
-    // Create schedules table if it doesn't exist
-    this.sql`
-      CREATE TABLE IF NOT EXISTS container_schedules (
-        id TEXT PRIMARY KEY NOT NULL DEFAULT (randomblob(9)),
-        callback TEXT NOT NULL,
-        payload TEXT,
-        type TEXT NOT NULL CHECK(type IN ('scheduled', 'delayed')),
-        time INTEGER NOT NULL,
-        delayInSeconds INTEGER,
-        created_at INTEGER DEFAULT (unixepoch())
-      )
-    `;
+    this.renewActivityTimeout();
+    this.updateUsingInterception();
 
     if (this.container.running) {
       this.monitor = this.container.monitor();
@@ -801,9 +776,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     this.setupMonitorCallbacks();
 
     // TODO: We should consider an onHealthy callback
-    await this.ctx.blockConcurrencyWhile(async () => {
-      await this.onStart();
-    });
+    await this.onStart();
   }
 
   /**
@@ -850,10 +823,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     }
 
     // Determine which ports to check
-    const portsToCheck = await this.getPortsToCheck(ports);
-
-    // trigger all onStop that we didn't do yet
-    await this.syncPendingStoppedEvents();
+    const portsToCheck = this.getPortsToCheck(ports);
 
     // Prepare to start the container
     resolvedCancellationOptions ??= {};
@@ -890,11 +860,9 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
 
     this.setupMonitorCallbacks();
 
-    await this.ctx.blockConcurrencyWhile(async () => {
-      // All ports are ready
-      await this.state.setHealthy();
-      await this.onStart();
-    });
+    // All ports are ready
+    await this.state.setHealthy();
+    await this.onStart();
   }
 
   /**
@@ -1084,6 +1052,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     callback: string,
     payload?: T
   ): Promise<Schedule<T>> {
+    this.ensureSchedulesTable();
     const id = generateId(9);
 
     // Ensure the callback is a string (method name)
@@ -1173,8 +1142,13 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       portParam
     );
 
-    const state = await this.state.getState();
-    if (!this.container.running || state.status !== 'healthy') {
+    let isReady = false;
+    if (this.container.running) {
+      const state = await this.state.getState();
+      isReady = state.status === 'healthy';
+    }
+
+    if (!isReady) {
       try {
         await this.startAndWaitForPorts(port, { abort: request.signal });
       } catch (e) {
@@ -1355,6 +1329,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   private onStopCalled = false;
   private state: ContainerState;
   private monitor: Promise<unknown> | undefined;
+  private schedulesTableInitialized = false;
 
   // Coalesces concurrent calls to startContainerIfNotRunning so we never
   // call `this.container.start()` twice. Without this guard, two requests
@@ -1381,7 +1356,6 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   // The runtime does not expose a way to remove outbound interceptions yet, so
   // once we promote an instance to intercept-all we must keep using it.
   private hasInterceptAllRegistration = false;
-
   // ==========================
   //     GENERAL HELPERS
   // ==========================
@@ -1407,7 +1381,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     return this.deniedHostsOverride ?? this.deniedHosts;
   }
 
-  private getOutboundConfiguration(): PersistedOutboundConfiguration {
+  private getOutboundConfiguration(): OutboundConfiguration {
     return {
       outboundByHostOverrides:
         Object.keys(this.outboundByHostOverrides).length > 0
@@ -1420,56 +1394,20 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     };
   }
 
-  private persistOutboundConfiguration(configuration: PersistedOutboundConfiguration): void {
-    this.ctx.storage.kv.put(OUTBOUND_CONFIGURATION_KEY, {
-      ...configuration,
-      allowedHosts: this.allowedHostsOverride,
-      deniedHosts: this.deniedHostsOverride,
-    });
-  }
-
-  private restoreOutboundConfiguration(): PersistedOutboundConfiguration | undefined {
-    const configuration = this.ctx.storage.kv.get<PersistedOutboundConfiguration>(
-      OUTBOUND_CONFIGURATION_KEY
-    );
-
-    if (!configuration) {
-      return undefined;
+  private updateUsingInterception(
+    outboundConfiguration?: OutboundConfiguration
+  ): void {
+    const ctor = this.constructor as typeof Container;
+    if (
+      outboundConfiguration !== undefined ||
+      ctor.outboundByHost !== undefined ||
+      ctor.outbound !== undefined ||
+      ctor.outboundHandlers !== undefined ||
+      this.effectiveAllowedHosts !== undefined ||
+      this.effectiveDeniedHosts !== undefined
+    ) {
+      this.usingInterception = true;
     }
-
-    this.outboundHandlerOverride = undefined;
-    if (configuration.outboundHandlerOverride !== undefined) {
-      try {
-        this.validateOutboundHandlerMethodName(configuration.outboundHandlerOverride.method);
-        this.outboundHandlerOverride = configuration.outboundHandlerOverride;
-      } catch (error) {
-        console.warn('Ignoring invalid persisted outbound handler override:', error);
-      }
-    }
-
-    this.outboundByHostOverrides = {};
-    for (const [hostname, override] of Object.entries(
-      configuration.outboundByHostOverrides ?? {}
-    )) {
-      try {
-        this.validateOutboundHandlerMethodName(override.method);
-        this.outboundByHostOverrides[hostname] = override;
-      } catch (error) {
-        console.warn(`Ignoring invalid persisted outbound override for ${hostname}:`, error);
-      }
-    }
-
-    this.hasInterceptAllRegistration = configuration.hasInterceptAllRegistration === true;
-
-    if (configuration.allowedHosts) {
-      this.allowedHostsOverride = configuration.allowedHosts;
-    }
-
-    if (configuration.deniedHosts) {
-      this.deniedHostsOverride = configuration.deniedHosts;
-    }
-
-    return this.getOutboundConfiguration();
   }
 
   /**
@@ -1573,7 +1511,6 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     }
 
     const outboundConfiguration = this.getOutboundConfiguration();
-    this.persistOutboundConfiguration(outboundConfiguration);
 
     const hosts = this.getHostsToIntercept();
 
@@ -1625,6 +1562,25 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   /**
    * Execute SQL queries against the Container's database
    */
+  private ensureSchedulesTable(): void {
+    if (this.schedulesTableInitialized) {
+      return;
+    }
+
+    this.sql`
+      CREATE TABLE IF NOT EXISTS container_schedules (
+        id TEXT PRIMARY KEY NOT NULL DEFAULT (randomblob(9)),
+        callback TEXT NOT NULL,
+        payload TEXT,
+        type TEXT NOT NULL CHECK(type IN ('scheduled', 'delayed')),
+        time INTEGER NOT NULL,
+        delayInSeconds INTEGER,
+        created_at INTEGER DEFAULT (unixepoch())
+      )
+    `;
+    this.schedulesTableInitialized = true;
+  }
+
   private sql<T = Record<string, string | number | boolean | null>>(
     strings: TemplateStringsArray,
     ...values: (string | number | boolean | null)[]
@@ -1682,7 +1638,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    * 3. `defaultPort` (if neither of the above is specified)
    * 4. Falls back to port 33 if none of the above are set
    */
-  private async getPortsToCheck(overridePorts?: number | number[]) {
+  private getPortsToCheck(overridePorts?: number | number[]) {
     if (overridePorts !== undefined) {
       // Use explicitly provided ports (single port or array)
       return Array.isArray(overridePorts) ? overridePorts : [overridePorts];
@@ -1807,13 +1763,15 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
         await handleError();
       }
 
-      await this.scheduleNextAlarm();
-
-      if (!this.container.running) {
-        await this.refreshOutboundInterception();
+      const containerWasRunning = this.container.running;
+      if (!containerWasRunning) {
+        if (this.usingInterception) {
+          await this.refreshOutboundInterception();
+        }
         this.container.start(startConfig);
         this.monitor = this.container.monitor();
         await this.state.setRunning();
+        await this.scheduleNextAlarm();
       } else {
         await this.scheduleNextAlarm();
       }
@@ -1944,6 +1902,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
   }
 
   deleteSchedules(name: string): void {
+    this.ensureSchedulesTable();
     this.sql`DELETE FROM container_schedules WHERE callback = ${name}`;
   }
 
@@ -1957,6 +1916,8 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    */
 
   override async alarm(alarmProps?: AlarmInvocationInfo): Promise<void> {
+    this.ensureSchedulesTable();
+
     if (
       alarmProps !== undefined &&
       alarmProps.isRetry &&
@@ -1976,8 +1937,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     //  1. The container is not running anymore.
     //  2. Activity expired and it exits.
     const prevAlarm = Date.now();
-    await this.ctx.storage.setAlarm(prevAlarm);
-    await this.ctx.storage.sync();
+    await this.ctx.storage.setAlarm(prevAlarm, { allowUnconfirmed: true });
 
     // Get all schedules that should be executed now
     const result = this.sql<{
@@ -2038,9 +1998,9 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       await this.syncPendingStoppedEvents();
 
       if (resultForMinTime.length == 0) {
-        await this.ctx.storage.deleteAlarm();
+        await this.ctx.storage.deleteAlarm({ allowUnconfirmed: true });
       } else {
-        await this.ctx.storage.setAlarm(minTimeFromSchedules);
+        await this.ctx.storage.setAlarm(minTimeFromSchedules, { allowUnconfirmed: true });
       }
 
       return;
@@ -2071,7 +2031,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       }, timeout);
     });
 
-    await this.ctx.storage.setAlarm(Date.now());
+    await this.ctx.storage.setAlarm(Date.now(), { allowUnconfirmed: true });
 
     // we exit and we have another alarm,
     // the next alarm is the one that decides if it should stop the loop.
@@ -2124,11 +2084,12 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       clearTimeout(this.timeout);
     }
 
-    await this.ctx.storage.setAlarm(nextTime);
-    await this.ctx.storage.sync();
+    await this.ctx.storage.setAlarm(nextTime, { allowUnconfirmed: true });
   }
 
   async listSchedules<T = string>(name: string): Promise<Schedule<T>[]> {
+    this.ensureSchedulesTable();
+
     const result = this.sql<ScheduleSQL>`
       SELECT * FROM container_schedules WHERE callback = ${name} LIMIT 1
     `;
@@ -2176,6 +2137,8 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    * @returns The Schedule object or undefined if not found
    */
   async getSchedule<T = string>(id: string): Promise<Schedule<T> | undefined> {
+    this.ensureSchedulesTable();
+
     const result = this.sql<ScheduleSQL>`
       SELECT * FROM container_schedules WHERE id = ${id} LIMIT 1
     `;
