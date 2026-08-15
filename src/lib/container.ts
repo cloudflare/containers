@@ -599,6 +599,16 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     return { ...(await this.state.getState()) };
   }
 
+  /**
+   * Gets the container's registry reference url (ex/ `registry.example.com/image:latest`)
+   * @returns Promise<string>
+   */
+  async image(): Promise<string> {
+    const inspect = await this.container.inspect();
+
+    return inspect.image;
+  }
+
   // ====================================
   //     OUTBOUND INTERCEPTION CONFIG
   // ====================================
