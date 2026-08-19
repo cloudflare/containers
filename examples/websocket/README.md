@@ -10,9 +10,9 @@ Tests WebSocket forwarding capabilities including:
 ## Usage
 
 ```bash
-npm install
-npm run dev
-npm test
+pnpm install
+pnpm dev
+pnpm test
 ```
 
 ## Endpoints

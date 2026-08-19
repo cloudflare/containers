@@ -1,0 +1,13 @@
+packages:
+  - '.'
+  - 'examples/*'
+
+catalog:
+  '@types/node': ^24.13.3
+  typescript: ^7.0.2
+  vitest: ^4.1.10
+  wrangler: ^4.123.0
+
+allowBuilds:
+  esbuild: true
+  workerd: true

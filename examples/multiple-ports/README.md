@@ -5,6 +5,6 @@ This example demonstrates how you can route requests to particular ports on a co
 ## Usage
 
 ```bash
-npm install
-npm run dev
+pnpm install
+pnpm dev
 ```

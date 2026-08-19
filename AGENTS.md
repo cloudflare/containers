@@ -127,13 +127,16 @@ await this.schedule(new Date('2026-01-01'), 'myCallback'); // specific time
 ## Development
 
 ```bash
-npm run build       # tsc compile to dist/
-npm run typecheck   # type check without emitting
-npm run lint        # eslint
-npm run format      # prettier
-npm run test        # runs integration tests in each examples/*/test directory
-npm run test:unit   # runs unit tests in src/tests/
+pnpm build             # tsc compile to dist/
+pnpm typecheck         # type check without emitting
+pnpm typecheck:all     # root + every example
+pnpm lint              # eslint
+pnpm format            # prettier
+pnpm test              # runs integration tests in each examples/*/test directory
+pnpm test:unit         # runs unit tests in src/tests/
 ```
+
+Run a single example's scripts with `pnpm --filter <package-name> <script>` (e.g. `pnpm --filter containers-websocket-example test`).
 
 Unit tests live in `src/tests/` (mocked container ctx, no Docker required). Integration tests live in `examples/*/test/` and spawn `wrangler dev` + Docker containers. When adding new functionality, decide which is more appropriate — prefer the unit test if the behavior can be exercised with the mocks in `src/tests/fixtures.ts`; otherwise add or extend an example test.
 
@@ -170,6 +173,6 @@ Call `runner.destroy([id])` when the test needs to fire the worker's `/destroy?i
 This repo uses [changesets](https://github.com/changesets/changesets). When making a user-facing change, add a changeset:
 
 ```bash
-npx changeset
+pnpm changeset
 ```
 
