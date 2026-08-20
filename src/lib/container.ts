@@ -1566,6 +1566,14 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       );
     }
 
+    // Checked up front so an unsupported runtime fails before any interception is
+    // applied, rather than part-way through and leaving HTTP hosts intercepted.
+    if (this.interceptHttps && typeof this.container.interceptOutboundHttps !== 'function') {
+      throw new Error(
+        'interceptHttps is enabled, but ctx.container.interceptOutboundHttps is not available in this runtime. HTTPS interception requires a runtime dated 2026-04-02 or later, please update wrangler and your compatibility date'
+      );
+    }
+
     const interceptAll = this.shouldInterceptAllOutbound();
 
     if (interceptAll) {
