@@ -1,5 +1,5 @@
 ---
-'@cloudflare/containers': patch
+'@cloudflare/containers': minor
 ---
 
 Declare an optional peer dependency on `@cloudflare/workers-types` of `>=4.20260402.1`, the first release providing `Container.interceptOutboundHttps`.
