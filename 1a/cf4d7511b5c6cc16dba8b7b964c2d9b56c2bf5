@@ -1,0 +1,21 @@
+pnpm-lock.yaml
+  s_ca52415d45fa81::t_2f35c3044fbea5 22-24,33-34,77,96,109,128,141,154,173,198,220,339-340,1831,2016,3138,3149
+package.json
+  s_ca52415d45fa81::t_886df4129e51a8 54,65-72
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "1acf4d7511b5c6cc16dba8b7b964c2d9b56c2bf5",
+  "prompts": {},
+  "sessions": {
+    "s_ca52415d45fa81": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fdf485ab1ffeK55rSAtnDbUet0",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Matt Johnson-Pint <mjohnson-pint@cloudflare.com>"
+    }
+  }
+}
