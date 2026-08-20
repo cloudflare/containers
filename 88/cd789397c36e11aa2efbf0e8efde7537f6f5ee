@@ -1,0 +1,92 @@
+.changeset/config.json
+  s_1345faeebd0137::t_bad1fab19f3172 10-14
+.github/workflows/prerelease.yml
+  s_1345faeebd0137::t_cb1266ae1fe102 21-22,24,27,29
+  s_e7c0af2731ee87::t_5c98e8e6adc085 19
+.github/workflows/tests.yml
+  s_1345faeebd0137::t_025ad933536c38 19-20,22,25,28,31,34,44-45,47,50
+  s_e7c0af2731ee87::t_d26021dca8a13b 17,42
+.prettierignore
+  s_1345faeebd0137::t_d7107ddbc20480 3
+CONTRIBUTING.md
+  s_1345faeebd0137::t_9bba6cc0774093 7-10
+examples/basic/package.json
+  s_1345faeebd0137::t_9d8e94d2603cad 7,10,12,20
+examples/core-tests/README.md
+  s_1345faeebd0137::t_32437f9ecac155 13-15
+examples/core-tests/package.json
+  s_1345faeebd0137::t_28a86c5cb5fe3b 9,11,13,15,26
+examples/egress-interception/package.json
+  s_1345faeebd0137::t_a2beb69732035f 7,10,12,20
+examples/egress-tests/package.json
+  s_1345faeebd0137::t_45585e2d8ab5db 9,11,13,15,26
+examples/fuse-on-r2/package.json
+  s_1345faeebd0137::t_34e60c4384b63f 8,11,13,21
+examples/load-balancing/README.md
+  s_1345faeebd0137::t_c9e9d62f8abc41 8-9
+examples/load-balancing/package.json
+  s_1345faeebd0137::t_b1fcf7ae0fd21e 8,10,12,20
+examples/multiple-ports/README.md
+  s_1345faeebd0137::t_83cb7297b6a566 8-9
+examples/multiple-ports/package.json
+  s_1345faeebd0137::t_05b42b43f62922 9,11,13,15,26
+examples/timeout/package.json
+  s_1345faeebd0137::t_3005064eb8d9e4 7,10,12,20
+examples/websocket/README.md
+  s_1345faeebd0137::t_fbb124a5b62318 13-15
+examples/websocket/package.json
+  s_1345faeebd0137::t_7722eb1cb39730 9,11,13,15,28
+  s_8b9d274d3db388::t_1049db3af3afd1 25
+package.json
+  s_1345faeebd0137::t_6e58bf7a9b051d 12-13,17,44-51
+  s_d1ee6ec93f26e1::t_920d68ad8b4f8b 56,60,62
+pnpm-lock.yaml
+  s_1345faeebd0137::t_29b03e2453320f 1-6,22-35,37-50,52-56,58-66,68-69,71-79,81-82,84-85,87-88,90-98,100-101,103-111,113-114,116-117,119-120,122-130,132-133,135-143,145-146,148-156,158-159,161-162,164-165,167-171,173-174,176-177,179-187,189-190,192-200,202-206,208-209,211-212,214-3364
+  s_d1ee6ec93f26e1::t_c742261366a37d 7-21,36,51,57,67,70,80,83,86,89,99,102,112,115,118,121,131,134,144,147,157,160,163,166,172,175,178,188,191,201,207,210,213
+.github/workflows/new-pr-review.yml
+  s_e7c0af2731ee87::t_a4edba415f33c7 31
+.github/workflows/bonk.yml
+  s_e7c0af2731ee87::t_8d742286a07b11 27
+.github/workflows/changesets.yml
+  s_e7c0af2731ee87::t_237f64fa5bc6aa 19,35,37-40
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "88cd789397c36e11aa2efbf0e8efde7537f6f5ee",
+  "prompts": {},
+  "sessions": {
+    "s_1345faeebd0137": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fe7c2a86bffe47z2xt1hVXpwC4",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Matt Johnson-Pint <mjohnson-pint@cloudflare.com>"
+    },
+    "s_8b9d274d3db388": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fe7a352eaffe7jNs2uwjibr8bd",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Matt Johnson-Pint <mjohnson-pint@cloudflare.com>"
+    },
+    "s_d1ee6ec93f26e1": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fe7ae5307ffekStRtPSd5GkO8X",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Matt Johnson-Pint <mjohnson-pint@cloudflare.com>"
+    },
+    "s_e7c0af2731ee87": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fe78146abffenjwpNktLHJxQ7t",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Matt Johnson-Pint <mjohnson-pint@cloudflare.com>"
+    }
+  }
+}
