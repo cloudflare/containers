@@ -1,0 +1,37 @@
+examples/websocket/package.json
+  s_8b9d274d3db388::t_1049db3af3afd1 25
+.github/workflows/new-pr-review.yml
+  s_e7c0af2731ee87::t_a4edba415f33c7 31
+.github/workflows/bonk.yml
+  s_e7c0af2731ee87::t_8d742286a07b11 27
+.github/workflows/prerelease.yml
+  s_e7c0af2731ee87::t_5c98e8e6adc085 19
+.github/workflows/changesets.yml
+  s_e7c0af2731ee87::t_237f64fa5bc6aa 19,35,37-40
+.github/workflows/tests.yml
+  s_e7c0af2731ee87::t_d26021dca8a13b 17,42
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "ee104df397c61bf971e753726d0aecacca91dd9c",
+  "prompts": {},
+  "sessions": {
+    "s_8b9d274d3db388": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fe7a352eaffe7jNs2uwjibr8bd",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Matt Johnson-Pint <mjohnson-pint@cloudflare.com>"
+    },
+    "s_e7c0af2731ee87": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fe78146abffenjwpNktLHJxQ7t",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Matt Johnson-Pint <mjohnson-pint@cloudflare.com>"
+    }
+  }
+}
