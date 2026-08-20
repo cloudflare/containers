@@ -19,6 +19,9 @@ catalogs:
       specifier: ^4.123.0
       version: 4.123.0
 
+overrides:
+  '@cloudflare/workers-types': 4.20260402.1
+
 importers:
 
   .:
@@ -27,8 +30,8 @@ importers:
         specifier: ^3.0.1
         version: 3.0.1
       '@cloudflare/workers-types':
-        specifier: ^5.20260820.1
-        version: 5.20260820.1
+        specifier: 4.20260402.1
+        version: 4.20260402.1
       '@eslint/js':
         specifier: ^10.0.1
         version: 10.0.1(eslint@10.8.1(supports-color@10.2.2))
@@ -71,7 +74,7 @@ importers:
         version: 7.0.2
       wrangler:
         specifier: 'catalog:'
-        version: 4.123.0(@cloudflare/workers-types@5.20260820.1)
+        version: 4.123.0(@cloudflare/workers-types@4.20260402.1)
 
   examples/core-tests:
     dependencies:
@@ -90,7 +93,7 @@ importers:
         version: 4.1.10(@types/node@24.13.3)(vite@8.2.1(@types/node@24.13.3)(esbuild@0.28.1)(yaml@2.9.0))
       wrangler:
         specifier: 'catalog:'
-        version: 4.123.0(@cloudflare/workers-types@5.20260820.1)
+        version: 4.123.0(@cloudflare/workers-types@4.20260402.1)
 
   examples/egress-interception:
     dependencies:
@@ -103,7 +106,7 @@ importers:
         version: 7.0.2
       wrangler:
         specifier: 'catalog:'
-        version: 4.123.0(@cloudflare/workers-types@5.20260820.1)
+        version: 4.123.0(@cloudflare/workers-types@4.20260402.1)
 
   examples/egress-tests:
     dependencies:
@@ -122,7 +125,7 @@ importers:
         version: 4.1.10(@types/node@24.13.3)(vite@8.2.1(@types/node@24.13.3)(esbuild@0.28.1)(yaml@2.9.0))
       wrangler:
         specifier: 'catalog:'
-        version: 4.123.0(@cloudflare/workers-types@5.20260820.1)
+        version: 4.123.0(@cloudflare/workers-types@4.20260402.1)
 
   examples/fuse-on-r2:
     dependencies:
@@ -135,7 +138,7 @@ importers:
         version: 7.0.2
       wrangler:
         specifier: 'catalog:'
-        version: 4.123.0(@cloudflare/workers-types@5.20260820.1)
+        version: 4.123.0(@cloudflare/workers-types@4.20260402.1)
 
   examples/load-balancing:
     dependencies:
@@ -148,7 +151,7 @@ importers:
         version: 7.0.2
       wrangler:
         specifier: 'catalog:'
-        version: 4.123.0(@cloudflare/workers-types@5.20260820.1)
+        version: 4.123.0(@cloudflare/workers-types@4.20260402.1)
 
   examples/multiple-ports:
     dependencies:
@@ -167,7 +170,7 @@ importers:
         version: 4.1.10(@types/node@24.13.3)(vite@8.2.1(@types/node@24.13.3)(esbuild@0.28.1)(yaml@2.9.0))
       wrangler:
         specifier: 'catalog:'
-        version: 4.123.0(@cloudflare/workers-types@5.20260820.1)
+        version: 4.123.0(@cloudflare/workers-types@4.20260402.1)
 
   examples/test-helpers:
     devDependencies:
@@ -192,7 +195,7 @@ importers:
         version: 7.0.2
       wrangler:
         specifier: 'catalog:'
-        version: 4.123.0(@cloudflare/workers-types@5.20260820.1)
+        version: 4.123.0(@cloudflare/workers-types@4.20260402.1)
 
   examples/websocket:
     dependencies:
@@ -214,7 +217,7 @@ importers:
         version: 4.1.10(@types/node@24.13.3)(vite@8.2.1(@types/node@24.13.3)(esbuild@0.28.1)(yaml@2.9.0))
       wrangler:
         specifier: 'catalog:'
-        version: 4.123.0(@cloudflare/workers-types@5.20260820.1)
+        version: 4.123.0(@cloudflare/workers-types@4.20260402.1)
       ws:
         specifier: ^8.21.3
         version: 8.21.3
@@ -333,8 +336,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@cloudflare/workers-types@5.20260820.1':
-    resolution: {integrity: sha512-KFRmtV4toMf1LL2yXylFTIs7YAS1IYo6jrJCneBG8I1VXHcKCIdqPROH6lGum+gZ+ZgdcNZqxDgjM1yEMgma2w==}
+  '@cloudflare/workers-types@4.20260402.1':
+    resolution: {integrity: sha512-+oJ6FmNNYqct9yq2o1K98dIw8Pf1SF8qcs2mjyra40tK3PblB6Gqp890Ndmgj8stXwtJ9dAgSbO8i9tVHKwQyQ==}
 
   '@cspotcode/source-map-support@0.8.1':
     resolution: {integrity: sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw==}
@@ -1825,7 +1828,7 @@ packages:
     engines: {node: '>=22.0.0'}
     hasBin: true
     peerDependencies:
-      '@cloudflare/workers-types': ^5.20260811.1
+      '@cloudflare/workers-types': 4.20260402.1
     peerDependenciesMeta:
       '@cloudflare/workers-types':
         optional: true
@@ -2010,7 +2013,7 @@ snapshots:
   '@cloudflare/workerd-windows-64@1.20260811.1':
     optional: true
 
-  '@cloudflare/workers-types@5.20260820.1': {}
+  '@cloudflare/workers-types@4.20260402.1': {}
 
   '@cspotcode/source-map-support@0.8.1':
     dependencies:
@@ -3132,7 +3135,7 @@ snapshots:
       '@cloudflare/workerd-linux-arm64': 1.20260811.1
       '@cloudflare/workerd-windows-64': 1.20260811.1
 
-  wrangler@4.123.0(@cloudflare/workers-types@5.20260820.1):
+  wrangler@4.123.0(@cloudflare/workers-types@4.20260402.1):
     dependencies:
       '@cloudflare/kv-asset-handler': 0.5.0
       '@cloudflare/unenv-preset': 2.16.1(unenv@2.0.0-rc.24)(workerd@1.20260811.1)
@@ -3143,7 +3146,7 @@ snapshots:
       unenv: 2.0.0-rc.24
       workerd: 1.20260811.1
     optionalDependencies:
-      '@cloudflare/workers-types': 5.20260820.1
+      '@cloudflare/workers-types': 4.20260402.1
       fsevents: 2.3.3
     transitivePeerDependencies:
       - bufferutil

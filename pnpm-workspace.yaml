@@ -8,6 +8,21 @@ catalog:
   vitest: ^4.1.10
   wrangler: ^4.123.0
 
+# Deliberate floor for @cloudflare/workers-types — this is a library, so the types
+# we build against become the minimum our consumers need. The same version is
+# pinned as a devDependency and declared in peerDependencies.
+#
+# 4.20260402.1 is the oldest release src/ compiles against: the first to have
+# Container.interceptOutboundHttps (runtime dated 2026-04-02), which we call
+# whenever interceptHttps = true.
+# (TypeScript elides private field types, so that method never appears in our
+# emitted .d.ts — don't let that tempt the floor lower than the code requires.)
+#
+# Raise only when wrapping a new runtime API. `overrides` is what enforces the
+# pin — `pnpm update --latest` can rewrite package.json, but not this.
+overrides:
+  '@cloudflare/workers-types': 4.20260402.1
+
 allowBuilds:
   esbuild: true
   workerd: true
