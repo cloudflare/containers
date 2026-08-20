@@ -22,7 +22,7 @@
     "typescript": "catalog:",
     "vitest": "catalog:",
     "wrangler": "catalog:",
-    "ws": "^8.20.1"
+    "ws": "^8.21.3"
   },
   "dependencies": {
     "@cloudflare/containers": "workspace:*"

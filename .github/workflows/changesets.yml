@@ -13,10 +13,10 @@ permissions:
 jobs:
   release:
     name: Handle Changesets
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout Repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # See https://github.com/changesets/action/issues/187
           token: ${{ secrets.GH_ACCESS_TOKEN }}
@@ -32,8 +32,9 @@ jobs:
 
       - name: Create Version PR or Publish to NPM
         id: changesets
-        uses: changesets/action@v1
+        uses: changesets/action@v2
         with:
-          publish: pnpm exec changeset publish
-        env:
-          GITHUB_TOKEN: ${{ secrets.GH_ACCESS_TOKEN }}
+          # note: the action injects CHANGESETS_OUTPUT into this script's env,
+          # which is how it detects published packages and creates git tags
+          publish-script: pnpm exec changeset publish
+          github-token: ${{ secrets.GH_ACCESS_TOKEN }}
