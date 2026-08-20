@@ -1,0 +1,92 @@
+.changeset/config.json
+  s_1345faeebd0137::t_bad1fab19f3172 10-14
+.github/workflows/prerelease.yml
+  s_1345faeebd0137::t_cb1266ae1fe102 21-22,24,27,29
+  s_e7c0af2731ee87::t_5c98e8e6adc085 19
+.github/workflows/tests.yml
+  s_1345faeebd0137::t_025ad933536c38 19-20,22,25,28,31,34,44-45,47,50
+  s_e7c0af2731ee87::t_d26021dca8a13b 17,42
+.prettierignore
+  s_1345faeebd0137::t_d7107ddbc20480 3
+CONTRIBUTING.md
+  s_1345faeebd0137::t_9bba6cc0774093 7-10
+examples/basic/package.json
+  s_1345faeebd0137::t_9d8e94d2603cad 7,10,12,20
+examples/core-tests/README.md
+  s_1345faeebd0137::t_32437f9ecac155 13-15
+examples/core-tests/package.json
+  s_1345faeebd0137::t_28a86c5cb5fe3b 9,11,13,15,26
+examples/egress-interception/package.json
+  s_1345faeebd0137::t_a2beb69732035f 7,10,12,20
+examples/egress-tests/package.json
+  s_1345faeebd0137::t_45585e2d8ab5db 9,11,13,15,26
+examples/fuse-on-r2/package.json
+  s_1345faeebd0137::t_34e60c4384b63f 8,11,13,21
+examples/load-balancing/README.md
+  s_1345faeebd0137::t_c9e9d62f8abc41 8-9
+examples/load-balancing/package.json
+  s_1345faeebd0137::t_b1fcf7ae0fd21e 8,10,12,20
+examples/multiple-ports/README.md
+  s_1345faeebd0137::t_83cb7297b6a566 8-9
+examples/multiple-ports/package.json
+  s_1345faeebd0137::t_05b42b43f62922 9,11,13,15,26
+examples/timeout/package.json
+  s_1345faeebd0137::t_3005064eb8d9e4 7,10,12,20
+examples/websocket/README.md
+  s_1345faeebd0137::t_fbb124a5b62318 13-15
+examples/websocket/package.json
+  s_1345faeebd0137::t_7722eb1cb39730 9,11,13,15,28
+  s_8b9d274d3db388::t_1049db3af3afd1 25
+package.json
+  s_1345faeebd0137::t_6e58bf7a9b051d 12-13,17,44-51
+  s_d1ee6ec93f26e1::t_920d68ad8b4f8b 56,63
+pnpm-lock.yaml
+  s_1345faeebd0137::t_29b03e2453320f 1-6,22-26,29,32-35,41,43-47,50,52-53,56,59,62-69,72,75-82,85,88,91,94-101,104,107-114,117,120,123,126-133,136,139-146,149,152-159,162,165,168,171-174,177,180,183-190,193,196-203,206-209,212,215,218,220-223,227,231,235,239-240,244,248,252,256,260,264,268,272,276,280,284,288,292-335,338-722,723-732,736,740,744-747,752-878,881-943,1068-1109,1110-1117,1118-1124,1128-1132,1133-1155,1156-1159,1160-1200,1201-1223,1224-1226,1227-1232,1241-1254,1255-1265,1266-1270,1271-1274,1275-1278,1279-1286,1290-1301,1302-1304,1307-1316,1319-1326,1330-1407,1408-1411,1412-1414,1415-1422,1423-1562,1563-1566,1567-1570,1573-1584,1585-1590,1591-1594,1597-1606,1607-1615,1616-1620,1621-1637,1642-1644,1647-1651,1652-1657,1658-1661,1662-1676,1677-1701,1709-1716,1717-1856,1862-1873,1883-1884,1886,1891-1892,1918,1920,1922,1930,1932,1935,1937,1939-1940,1942,1948,1950,1953,1955,1959,1961,1965,1967,1969,1971,1973,1977,1982,1984,1989-2012,2014-2257,2258-2266,2268,2270,2272,2275,2277,2281-2283,2286-2360,2362,2364-2366,2368,2370-2371,2373,2376-2379,2382-2384,2386-2388,2390-2392,2394-2396,2398,2400-2401,2403-2410,2412,2414,2416-2417,2420-2421,2424-2428,2430,2433-2438,2441-2443,2445-2448,2450,2452-2459,2524-2532,2534-2538,2540-2577,2578-2581,2582-2587,2589-2591,2592-2609,2610-2611,2612-2698,2699-2716,2717-2718,2719-2722,2730,2732-2740,2741-2752,2753-2755,2756-2759,2760-2761,2762-2765,2768-2775,2776-2777,2779-2785,2787-2793,2799-2852,2853-2856,2857-2860,2861-2876,2877-2895,2896-2899,2900-2903,2905-2911,2912-2915,2916-2917,2919-2927,2928-2931,2932-2951,2952-2991,2993,2995,2997-2999,3000-3003,3004-3005,3006-3016,3018,3020-3027,3029,3034,3036-3040,3065-3071,3072-3075,3077-3083,3085-3086,3088,3090-3091,3093-3108,3110-3111,3113-3134,3136-3145,3147-3155,3158-3171
+  s_d1ee6ec93f26e1::t_c742261366a37d 7-9,12,15,17-18,20-21,36,60,70,73,83,86,89,92,102,105,115,118,121,124,134,137,147,150,160,163,166,169,175,178,181,191,194,204,210,213,216
+.github/workflows/new-pr-review.yml
+  s_e7c0af2731ee87::t_a4edba415f33c7 31
+.github/workflows/bonk.yml
+  s_e7c0af2731ee87::t_8d742286a07b11 27
+.github/workflows/changesets.yml
+  s_e7c0af2731ee87::t_237f64fa5bc6aa 19,35,37-40
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "e7942680cee821780d10bdb77991bf4447e190f6",
+  "prompts": {},
+  "sessions": {
+    "s_1345faeebd0137": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fe7c2a86bffe47z2xt1hVXpwC4",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Matt Johnson-Pint <mjohnson-pint@cloudflare.com>"
+    },
+    "s_8b9d274d3db388": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fe7a352eaffe7jNs2uwjibr8bd",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Matt Johnson-Pint <mjohnson-pint@cloudflare.com>"
+    },
+    "s_d1ee6ec93f26e1": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fe7ae5307ffekStRtPSd5GkO8X",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Matt Johnson-Pint <mjohnson-pint@cloudflare.com>"
+    },
+    "s_e7c0af2731ee87": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fe78146abffenjwpNktLHJxQ7t",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Matt Johnson-Pint <mjohnson-pint@cloudflare.com>"
+    }
+  }
+}
