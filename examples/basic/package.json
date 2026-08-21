@@ -4,19 +4,19 @@
   "private": true,
   "scripts": {
     "cf-typegen": "wrangler types",
-    "predev": "npm --prefix ../.. run build && npm run cf-typegen",
+    "predev": "pnpm --workspace-root run build && pnpm run cf-typegen",
     "dev": "wrangler dev",
     "start": "wrangler dev",
-    "predeploy": "npm --prefix ../.. run build && npm run cf-typegen",
+    "predeploy": "pnpm --workspace-root run build && pnpm run cf-typegen",
     "deploy": "wrangler deploy",
-    "pretypecheck": "npm --prefix ../.. run build && npm run cf-typegen",
+    "pretypecheck": "pnpm --workspace-root run build && pnpm run cf-typegen",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "typescript": "^6.0.3",
-    "wrangler": "^4.102.0"
+    "typescript": "catalog:",
+    "wrangler": "catalog:"
   },
   "dependencies": {
-    "@cloudflare/containers": "file:../.."
+    "@cloudflare/containers": "workspace:*"
   }
 }

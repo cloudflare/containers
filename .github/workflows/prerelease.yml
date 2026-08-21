@@ -16,18 +16,14 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup pnpm and Node.js
+        uses: pnpm/setup@v2
         with:
-          node-version: 24
-          cache: 'npm'
-
-      - name: Install Dependencies
-        run: npm ci
+          cache: true
 
       - name: Build Package 
-        run: npm run build
+        run: pnpm run build
 
-      - run: npx pkg-pr-new publish --comment=update
+      - run: pnpm exec pkg-pr-new publish --comment=update

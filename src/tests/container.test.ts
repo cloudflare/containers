@@ -1,7 +1,7 @@
 import { describe, expect, test as baseTest, vi } from 'vitest';
 import { Container } from '../lib/container';
 import { getRandom } from '../lib/utils';
-import { MockWebSocket, test, webSocketPairSpy } from './fixtures';
+import { MockWebSocket, test, webSocketPairSpy, type MockCtx } from './fixtures';
 
 describe('Container', () => {
   test('should initialize with default values', ({ container }) => {
@@ -435,6 +435,65 @@ describe('Container', () => {
     await container.fetch(mockRequest);
 
     expect(proxySpy).toHaveBeenCalledWith(mockRequest, container.defaultPort);
+  });
+});
+
+describe('HTTPS interception runtime guard', () => {
+  // Simulates a runtime older than the one that introduced
+  // ctx.container.interceptOutboundHttps (workerd ~2026-04-03).
+  const removeHttpsSupport = (mockCtx: MockCtx): void => {
+    delete (mockCtx.container as { interceptOutboundHttps?: unknown }).interceptOutboundHttps;
+  };
+
+  test('throws an actionable error when interceptHttps is enabled', async ({
+    mockCtx,
+    container,
+  }) => {
+    removeHttpsSupport(mockCtx);
+    container.interceptHttps = true;
+
+    await expect(container.setAllowedHosts(['example.com'])).rejects.toThrow(
+      /ctx\.container\.interceptOutboundHttps is not available in this runtime/
+    );
+  });
+
+  // Without the up-front check, the per-host loop applies HTTP interception for a
+  // static host and only then hits the missing HTTPS method, leaving the container
+  // partially intercepted.
+  test('leaves no partial interception applied when the guard trips', async ({ mockCtx }) => {
+    class PartialInterceptionContainer extends Container {
+      interceptHttps = true;
+    }
+    PartialInterceptionContainer.outboundByHost = {
+      'api.example.com': () => new Response('ok'),
+    };
+
+    const container = new PartialInterceptionContainer(mockCtx as never, {});
+    removeHttpsSupport(mockCtx);
+
+    await expect(container.setAllowedHosts(['example.com'])).rejects.toThrow();
+
+    expect(mockCtx.container.interceptOutboundHttp).not.toHaveBeenCalled();
+    expect(mockCtx.container.interceptAllOutboundHttp).not.toHaveBeenCalled();
+  });
+
+  test('still intercepts HTTP when interceptHttps is disabled', async ({ mockCtx, container }) => {
+    removeHttpsSupport(mockCtx);
+
+    await container.setAllowedHosts(['example.com']);
+
+    expect(mockCtx.container.interceptAllOutboundHttp).toHaveBeenCalled();
+  });
+
+  test('applies HTTPS interception when the runtime supports it', async ({
+    mockCtx,
+    container,
+  }) => {
+    container.interceptHttps = true;
+
+    await container.setAllowedHosts(['example.com']);
+
+    expect(mockCtx.container.interceptOutboundHttps).toHaveBeenCalledWith('*', expect.anything());
   });
 });
 

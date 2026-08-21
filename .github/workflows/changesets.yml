@@ -13,31 +13,28 @@ permissions:
 jobs:
   release:
     name: Handle Changesets
-    runs-on: macos-latest-large
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout Repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # See https://github.com/changesets/action/issues/187
           token: ${{ secrets.GH_ACCESS_TOKEN }}
           fetch-depth: 0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup pnpm and Node.js
+        uses: pnpm/setup@v2
         with:
-          node-version: 24
-          cache: 'npm'
-
-      - name: Install Dependencies
-        run: npm ci
+          cache: true
 
       - name: Build Package 
-        run: npm run build
+        run: pnpm run build
 
       - name: Create Version PR or Publish to NPM
         id: changesets
-        uses: changesets/action@v1
+        uses: changesets/action@v2
         with:
-          publish: npx changeset publish
-        env:
-          GITHUB_TOKEN: ${{ secrets.GH_ACCESS_TOKEN }}
+          # note: the action injects CHANGESETS_OUTPUT into this script's env,
+          # which is how it detects published packages and creates git tags
+          publish-script: pnpm exec changeset publish
+          github-token: ${{ secrets.GH_ACCESS_TOKEN }}

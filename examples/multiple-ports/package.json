@@ -6,23 +6,23 @@
   "private": true,
   "scripts": {
     "cf-typegen": "wrangler types",
-    "predev": "npm --prefix ../.. run build && npm run cf-typegen",
+    "predev": "pnpm --workspace-root run build && pnpm run cf-typegen",
     "dev": "wrangler dev",
-    "predeploy": "npm --prefix ../.. run build && npm run cf-typegen",
+    "predeploy": "pnpm --workspace-root run build && pnpm run cf-typegen",
     "deploy": "wrangler deploy",
-    "pretypecheck": "npm --prefix ../.. run build && npm run cf-typegen",
+    "pretypecheck": "pnpm --workspace-root run build && pnpm run cf-typegen",
     "typecheck": "tsc --noEmit",
-    "pretest": "npm --prefix ../.. run build && npm run cf-typegen",
+    "pretest": "pnpm --workspace-root run build && pnpm run cf-typegen",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "devDependencies": {
-    "@types/node": "^22.19.19",
-    "typescript": "^6.0.3",
-    "vitest": "^4.1.6",
-    "wrangler": "^4.102.0"
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "wrangler": "catalog:"
   },
   "dependencies": {
-    "@cloudflare/containers": "file:../.."
+    "@cloudflare/containers": "workspace:*"
   }
 }

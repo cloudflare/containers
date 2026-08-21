@@ -9,12 +9,12 @@
   "scripts": {
     "build": "tsc -p .",
     "typecheck": "tsc --noEmit",
-    "typecheck:examples": "set -e; for dir in examples/*/; do if [ ! -f \"$dir/tsconfig.json\" ]; then continue; fi; echo \"==> typecheck $dir\"; if [ -f \"$dir/package.json\" ]; then (cd \"$dir\" && npm install && npm run typecheck); else tsc --noEmit -p \"$dir\"; fi; done",
-    "typecheck:all": "npm run typecheck && npm run typecheck:examples",
+    "typecheck:examples": "pnpm --recursive --sequential --filter \"./examples/*\" run typecheck",
+    "typecheck:all": "pnpm run typecheck && pnpm run typecheck:examples",
     "lint": "eslint src",
     "format": "prettier --write \"src/**/*.ts\" \"examples/**/*.{ts,json,jsonc}\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"examples/**/*.{ts,json,jsonc}\"",
-    "test": "set -e; for dir in examples/*/; do if [ -d \"$dir/test\" ] && [ -f \"$dir/package.json\" ]; then echo \"==> test $dir\"; (cd \"$dir\" && npm install && npm run test); fi; done",
+    "test": "pnpm --recursive --sequential --filter \"./examples/*\" run test",
     "test:unit": "vitest run src/tests"
   },
   "exports": {
@@ -41,17 +41,34 @@
     "cloudflare"
   ],
   "license": "MIT OR Apache-2.0",
+  "packageManager": "pnpm@11.22.0",
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": "^24.0.0",
+      "onFail": "download"
+    }
+  },
   "devDependencies": {
-    "@changesets/cli": "^2.31.0",
-    "@cloudflare/workers-types": "^4.20260511.1",
+    "@changesets/cli": "^3.0.1",
+    "@cloudflare/workers-types": "4.20260402.1",
     "@eslint/js": "^10.0.1",
-    "@types/node": "^22.19.19",
-    "eslint": "^10.3.0",
-    "pkg-pr-new": "^0.0.71",
-    "prettier": "^3.8.3",
-    "typescript": "^6.0.3",
-    "typescript-eslint": "^8.59.3",
-    "vitest": "^4.1.6"
+    "@types/node": "catalog:",
+    "@typescript/native": "npm:typescript@^7.0.2",
+    "eslint": "^10.8.1",
+    "pkg-pr-new": "^0.0.88",
+    "prettier": "^3.9.6",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "typescript-eslint": "^8.67.0",
+    "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "@cloudflare/workers-types": ">=4.20260402.1"
+  },
+  "peerDependenciesMeta": {
+    "@cloudflare/workers-types": {
+      "optional": true
+    }
   },
   "publishConfig": {
     "access": "public"
