@@ -27,8 +27,8 @@ jobs:
         with:
           cache: true
 
-      - name: Build Package 
-        run: pnpm run build
+      - name: Build Package
+        run: pnpm build
 
       - name: Create Version PR or Publish to NPM
         id: changesets

@@ -1,12 +1,12 @@
 name: Publish prereleases
-on: 
+on:
   pull_request:
   push:
     branches:
       - main
       - next
-  
-permissions: 
+
+permissions:
   contents: read
 
 jobs:
@@ -23,7 +23,7 @@ jobs:
         with:
           cache: true
 
-      - name: Build Package 
-        run: pnpm run build
+      - name: Build Package
+        run: pnpm build
 
       - run: pnpm exec pkg-pr-new publish --comment=update
