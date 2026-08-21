@@ -596,7 +596,37 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    * @returns Promise<State>
    */
   async getState(): Promise<State> {
-    return { ...(await this.state.getState()) };
+    let state = await this.state.getState();
+
+    // The underlying container capability
+    // is what says if we are really running.
+    // This is a weird spot, we should not get here,
+    // however if we have a bug on state management still
+    // it's better to be defensive here.
+    // `stopped_with_code` is an edge case: it means the recorded exit belongs
+    // to a previous process and a new process has already started. Trust the
+    // runtime and repair the state, but do not call onStart again because the
+    // startup path owns that hook.
+    if (
+      this.container.running &&
+      (state.status === 'stopped' || state.status === 'stopped_with_code')
+    ) {
+      // Runtime state is authoritative here. Replacing `stopped_with_code`
+      // intentionally drops an exit code from a previous process because a
+      // newer process is already running; retaining it would report that old
+      // terminal event as the current process state.
+      await this.state.setRunning();
+
+      // Startup owns its monitor until startInFlight settles. Attaching another
+      // callback here could clear that monitor before startup handles its result.
+      if (this.startInFlight === undefined) {
+        this.monitor ??= this.container.monitor();
+        this.setupMonitorCallbacks();
+      }
+      state = await this.state.getState();
+    }
+
+    return { ...state };
   }
 
   // ====================================
@@ -782,7 +812,10 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    * @returns A promise that resolves when the container start command has been issued
    * @throws Error if no container context is available or if all start attempts fail
    */
-  public async start(startOptions?: ContainerStartConfigOptions, waitOptions?: WaitOptions) {
+  public async start(
+    startOptions?: ContainerStartConfigOptions,
+    waitOptions?: WaitOptions
+  ): Promise<void> {
     const portToCheck =
       waitOptions?.portToCheck ??
       this.defaultPort ??
@@ -2037,6 +2070,17 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     if (!this.container.running) {
       await this.syncPendingStoppedEvents();
 
+      if (this.startInFlight !== undefined) {
+        await this.scheduleNextAlarm();
+        return;
+      }
+
+      // A concurrent start may have completed while synchronising. Its alarm
+      // must remain scheduled so the running container keeps lifecycle checks.
+      if (this.container.running) {
+        return;
+      }
+
       if (resultForMinTime.length == 0) {
         await this.ctx.storage.deleteAlarm();
       } else {
@@ -2082,6 +2126,10 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
 
   // synchronises container state with the container source of truth to process events
   private async syncPendingStoppedEvents() {
+    if (this.startInFlight !== undefined) {
+      return;
+    }
+
     const state = await this.state.getState();
     if (!this.container.running && (state.status === 'healthy' || state.status === 'running')) {
       await this.callOnStop({ exitCode: 0, reason: 'exit' }, state);
