@@ -308,15 +308,23 @@ Use outbound interception when you want to control what the container can reach,
 
 To configure interception on the class itself:
 
-- `static outbound = (req, env, ctx) => Response`
+> [!IMPORTANT]
+> These three are **static accessors**, so they must be set by *assignment after the class
+> declaration* — not as `static` class fields. Under `useDefineForClassFields` semantics (the
+> default for `target: ES2022` and above) a `static outbound = …` field is installed with
+> `[[DefineOwnProperty]]`, which creates an own property that shadows the inherited setter
+> instead of invoking it. The handler is then never registered and every outbound request
+> fails closed with `520 Origin is disallowed`, with no error or warning.
+
+- `MyContainer.outbound = (req, env, ctx) => Response`
 
   Catch-all handler for outbound requests.
 
-- `static outboundByHost = { [host]: handler }`
+- `MyContainer.outboundByHost = { [host]: handler }`
 
   Per-host handlers for exact hostname matches such as `google.com` or an IP address.
 
-- `static outboundHandlers = { [name]: handler }`
+- `MyContainer.outboundHandlers = { [name]: handler }`
 
   Named handlers that can be selected at runtime with `setOutboundHandler` and `setOutboundByHost`.
 
@@ -476,22 +484,6 @@ export class MyContainer extends Container {
   // Block these hosts unconditionally, even if they appear in allowedHosts
   deniedHosts = ['evil.com', '*.malware.net'];
 
-  static outboundByHost = {
-    'google.com': (_req: Request, _env: unknown, ctx: OutboundHandlerContext) => {
-      return new Response('hi ' + ctx.containerId + ' i am google');
-    },
-  };
-
-  static outboundHandlers = {
-    async github(_req: Request, _env: unknown, _ctx: OutboundHandlerContext) {
-      return new Response('i am github');
-    },
-  };
-
-  static outbound = (req: Request) => {
-    return new Response(`Hi ${req.url}, I can't handle you`);
-  };
-
   async routeGithubThroughHandler(): Promise<void> {
     await this.setOutboundByHost('github.com', 'github');
   }
@@ -500,6 +492,25 @@ export class MyContainer extends Container {
     await this.setOutboundHandler('github');
   }
 }
+
+// Register the handlers by ASSIGNMENT, after the class declaration.
+// `outbound`, `outboundByHost` and `outboundHandlers` are static accessors; writing them as
+// `static` class fields shadows the setter under ES2022+ and silently skips registration.
+MyContainer.outboundByHost = {
+  'google.com': (_req: Request, _env: unknown, ctx: OutboundHandlerContext) => {
+    return new Response('hi ' + ctx.containerId + ' i am google');
+  },
+};
+
+MyContainer.outboundHandlers = {
+  async github(_req: Request, _env: unknown, _ctx: OutboundHandlerContext) {
+    return new Response('i am github');
+  },
+};
+
+MyContainer.outbound = (req: Request) => {
+  return new Response(`Hi ${req.url}, I can't handle you`);
+};
 ```
 
 Use `outboundByHost` for fixed host rules, `outbound` for a default catch-all, and `outboundHandlers` for reusable named handlers you want to switch on at runtime. Use `allowedHosts` and `deniedHosts` for glob-based host filtering (e.g. `'*.example.com'`). See the [full egress documentation](docs/egress.md) for detailed interception strategy and CA certificate setup for HTTPS interception.
