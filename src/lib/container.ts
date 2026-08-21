@@ -782,7 +782,10 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
    * @returns A promise that resolves when the container start command has been issued
    * @throws Error if no container context is available or if all start attempts fail
    */
-  public async start(startOptions?: ContainerStartConfigOptions, waitOptions?: WaitOptions) {
+  public async start(
+    startOptions?: ContainerStartConfigOptions,
+    waitOptions?: WaitOptions
+  ): Promise<void> {
     const portToCheck =
       waitOptions?.portToCheck ??
       this.defaultPort ??

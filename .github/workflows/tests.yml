@@ -22,16 +22,16 @@ jobs:
           cache: true
 
       - name: Lint
-        run: pnpm run lint
+        run: pnpm lint
 
       - name: Format check
-        run: pnpm run format:check
+        run: pnpm format:check
 
       - name: Typecheck (root and examples)
-        run: pnpm run typecheck:all
+        run: pnpm typecheck:all
 
       - name: Unit tests
-        run: pnpm run test:unit
+        run: pnpm test:unit
 
   examples-integration-tests:
     name: Examples integration tests
@@ -47,5 +47,5 @@ jobs:
           cache: true
 
       - name: Run integration tests in each example
-        run: pnpm run test
+        run: pnpm test
         timeout-minutes: 15
