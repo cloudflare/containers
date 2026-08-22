@@ -582,6 +582,12 @@ export class FetchStyleContainer extends Container {
 }
 ```
 
+Relative paths are resolved against an internal origin (`http://container`), so the container
+receives `Host: container` for these requests. Routing is unaffected — the request is always
+delivered to the selected port — but if your application validates the `Host` header (for example
+Django's `ALLOWED_HOSTS` or Vite's `allowedHosts`), either allow `container` or pass an absolute
+URL instead.
+
 ### Managing Container Idle Timeout
 
 The Container class includes an automatic idle timeout feature that will shut down the container after a period of inactivity. This helps save resources when containers are not in use.
