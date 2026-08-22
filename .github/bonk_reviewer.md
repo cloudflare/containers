@@ -77,6 +77,7 @@ Read `AGENTS.md` at the repo root before reviewing. Key facts that matter for re
 **Outbound interception priority:** The handler-resolution order (runtime `setOutboundByHost` → static `outboundByHost` → runtime `setOutboundHandler` → static `outbound` → direct internet) is documented behavior. Flag any change that alters this precedence, removes `ContainerProxy`-export requirements, or changes the static-vs-instance lookup semantics.
 
 **Public API stability:** This is a published npm package. Anything reachable from `src/index.ts` is part of the public surface. Flag:
+
 - Breaking signature changes to `Container`, `ContainerProxy`, `getRandom`, `getContainer`, `switchPort`, `loadBalance`, `outboundParams`
 - Renamed or removed lifecycle hooks, instance properties (`defaultPort`, `requiredPorts`, `sleepAfter`, `envVars`, `entrypoint`, `enableInternet`, `pingEndpoint`)
 - New required parameters added to existing public methods
@@ -88,6 +89,7 @@ Read `AGENTS.md` at the repo root before reviewing. Key facts that matter for re
 **Tests:** Unit tests live in `src/tests/` (mocked container ctx). Integration tests live in `examples/*/test/` and spawn `wrangler dev` + Docker. Per `AGENTS.md`, new functionality should prefer unit tests when the behavior can be exercised via `src/tests/fixtures.ts`; only reach for an integration test when the unit fixtures cannot cover it. Flag new tests that take the integration path unnecessarily.
 
 **TypeScript discipline:** This is a TS library. Flag:
+
 - New `any` types in public signatures
 - Loosened generics on public methods
 - Missing `await` on promise-returning calls inside `Container` methods (the DO runtime will silently lose work)

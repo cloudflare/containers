@@ -14,6 +14,7 @@ This is the `@cloudflare/containers` npm package — a TypeScript library that w
 - `getRandom`, `loadBalance` (deprecated), `getContainer`, `switchPort` — utility functions
 
 ## Releasing
+
 Add a new file to the `.changeset` directory representing a new version when wrapping up changes so they get released.
 Do NOT change CHANGELOG.md, that is codegenerated on a release MR that is automated.
 
@@ -175,4 +176,3 @@ This repo uses [changesets](https://github.com/changesets/changesets). When maki
 ```bash
 pnpm changeset
 ```
-
