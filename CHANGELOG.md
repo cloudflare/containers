@@ -1,5 +1,20 @@
 # @cloudflare/containers
 
+## 0.4.0
+
+### Minor Changes
+
+- bd79750: Declare an optional peer dependency on `@cloudflare/workers-types` of `>=4.20260402.1`, the first release providing `Container.interceptOutboundHttps`.
+  
+  Because consumers supply their own runtime types, the version this package builds against is the minimum they need. The range is enforced only when `@cloudflare/workers-types` is actually installed — projects using `wrangler types` are unaffected.
+
+### Patch Changes
+
+- 41206f9: Support relative URL paths in `containerFetch`.
+- b1b29ab: Fail with an actionable error when `interceptHttps` is enabled on a runtime that does not support `ctx.container.interceptOutboundHttps`.
+  
+  This previously surfaced as a bare `TypeError: this.container.interceptOutboundHttps is not a function`. Worse, the failure happened part-way through applying interception, so a container could be left with HTTP hosts already intercepted. The support check now runs before any interception is applied, and the error names the runtime date required (2026-04-02 or later).
+
 ## 0.3.7
 
 ### Patch Changes
