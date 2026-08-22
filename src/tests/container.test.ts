@@ -312,6 +312,54 @@ describe('Container', () => {
     expect(tcpPort.fetch).toHaveBeenCalledWith(expect.any(String), expect.any(Object));
   });
 
+  test('containerFetch should accept a relative URL', async ({ mockCtx, container }) => {
+    mockCtx.container.running = true;
+    mockCtx.storage.get.mockResolvedValue({ status: 'healthy', lastChange: Date.now() });
+
+    await container.containerFetch('/api/data');
+
+    const tcpPort = mockCtx.container.getTcpPort.mock.results[0].value;
+    expect(tcpPort.fetch).toHaveBeenCalledWith('http://container/api/data', expect.any(Request));
+  });
+
+  test('containerFetch should accept a relative URL with init and an explicit port', async ({
+    mockCtx,
+    container,
+  }) => {
+    mockCtx.container.running = true;
+    mockCtx.storage.get.mockResolvedValue({ status: 'healthy', lastChange: Date.now() });
+
+    await container.containerFetch(
+      '/api/data?query=value',
+      { method: 'POST', body: JSON.stringify({ query: 'example' }) },
+      9090
+    );
+
+    expect(mockCtx.container.getTcpPort).toHaveBeenCalledWith(9090);
+
+    const tcpPort = mockCtx.container.getTcpPort.mock.results[0].value;
+    expect(tcpPort.fetch).toHaveBeenCalledWith(
+      'http://container/api/data?query=value',
+      expect.any(Request)
+    );
+
+    const forwarded = tcpPort.fetch.mock.calls[0][1] as Request;
+    expect(forwarded.method).toBe('POST');
+    await expect(forwarded.text()).resolves.toBe(JSON.stringify({ query: 'example' }));
+  });
+
+  test('containerFetch should leave absolute URLs untouched', async ({ mockCtx, container }) => {
+    mockCtx.container.running = true;
+    mockCtx.storage.get.mockResolvedValue({ status: 'healthy', lastChange: Date.now() });
+
+    await container.containerFetch(new URL('https://example.com/admin'), { method: 'GET' }, 3000);
+
+    expect(mockCtx.container.getTcpPort).toHaveBeenCalledWith(3000);
+
+    const tcpPort = mockCtx.container.getTcpPort.mock.results[0].value;
+    expect(tcpPort.fetch).toHaveBeenCalledWith('http://example.com/admin', expect.any(Request));
+  });
+
   test('containerFetch should return 429 when startup is rate limited', async ({ container }) => {
     const mockRequest = new Request('https://example.com/test', { method: 'GET' });
     using startSpy = vi

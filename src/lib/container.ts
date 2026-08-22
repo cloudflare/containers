@@ -27,6 +27,7 @@ const UNEXPECTED_EXIT_ERROR = 'container exited with unexpected exit code:';
 const NOT_LISTENING_ERROR = 'the container is not listening';
 const CONTAINER_STATE_KEY = '__CF_CONTAINER_STATE';
 const OUTBOUND_CONFIGURATION_KEY = 'OUTBOUND_CONFIGURATION';
+const CONTAINER_REQUEST_BASE_URL = 'http://container';
 
 // maxRetries before scheduling next alarm is purposely set to 3,
 // as according to DO docs at https://developers.cloudflare.com/durable-objects/api/alarms/
@@ -1662,7 +1663,7 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       port = typeof portOrInit === 'number' ? portOrInit : undefined;
     } else {
       // URL-based: containerFetch(url, init?, port?)
-      const url = typeof requestOrUrl === 'string' ? requestOrUrl : requestOrUrl.toString();
+      const url = new URL(requestOrUrl, CONTAINER_REQUEST_BASE_URL);
       const init = typeof portOrInit === 'number' ? {} : portOrInit || {};
       port =
         typeof portOrInit === 'number'
