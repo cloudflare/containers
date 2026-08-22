@@ -1,0 +1,19 @@
+src/lib/container.ts
+  s_06afd47cb23a86::t_eb718d42484969 1207-1213
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "527fb0f044a63977eb5279e60beae1a2921265bb",
+  "prompts": {},
+  "sessions": {
+    "s_06afd47cb23a86": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fdaffe312ffeRbrtinkLUZgQhP",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Matt Johnson-Pint <mjohnson-pint@cloudflare.com>"
+    }
+  }
+}
