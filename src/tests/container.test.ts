@@ -360,6 +360,42 @@ describe('Container', () => {
     expect(tcpPort.fetch).toHaveBeenCalledWith('http://example.com/admin', expect.any(Request));
   });
 
+  test('containerFetch should preserve https: in query strings and fragments', async ({
+    mockCtx,
+    container,
+  }) => {
+    mockCtx.container.running = true;
+    mockCtx.storage.get.mockResolvedValue({ status: 'healthy', lastChange: Date.now() });
+
+    await container.containerFetch('/callback?redirect=https://app.example.com#https://fragment');
+
+    const tcpPort = mockCtx.container.getTcpPort.mock.results[0].value;
+    expect(tcpPort.fetch).toHaveBeenCalledWith(
+      'http://container/callback?redirect=https://app.example.com#https://fragment',
+      expect.any(Request)
+    );
+  });
+
+  test('containerFetch should downgrade only the scheme of an https URL', async ({
+    mockCtx,
+    container,
+  }) => {
+    mockCtx.container.running = true;
+    mockCtx.storage.get.mockResolvedValue({ status: 'healthy', lastChange: Date.now() });
+
+    await container.containerFetch(
+      'https://example.com/callback?redirect=https://app.example.com',
+      { method: 'GET' },
+      3000
+    );
+
+    const tcpPort = mockCtx.container.getTcpPort.mock.results[0].value;
+    expect(tcpPort.fetch).toHaveBeenCalledWith(
+      'http://example.com/callback?redirect=https://app.example.com',
+      expect.any(Request)
+    );
+  });
+
   test('containerFetch should return 429 when startup is rate limited', async ({ container }) => {
     const mockRequest = new Request('https://example.com/test', { method: 'GET' });
     using startSpy = vi

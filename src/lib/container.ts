@@ -1204,8 +1204,13 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
 
     const tcpPort = this.container.getTcpPort(port);
 
-    // Create URL for the container request
-    const containerUrl = request.url.replace('https:', 'http:');
+    // Create URL for the container request. `tcpPort.fetch` opens a raw TCP connection to the
+    // container, which does not terminate TLS, so an https scheme has to be downgraded.
+    // The match is anchored on purpose: an unanchored string replace rewrites the first `https:`
+    // anywhere in the URL, which corrupts query strings and fragments that carry an absolute URL
+    // (for example `/callback?redirect=https://app.example.com`) whenever the scheme is already
+    // http.
+    const containerUrl = request.url.replace(/^https:/, 'http:');
 
     this.inflightRequests++;
 
