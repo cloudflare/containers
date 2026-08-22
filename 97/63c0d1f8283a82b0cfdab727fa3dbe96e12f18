@@ -1,0 +1,31 @@
+.github/bonk_reviewer.md
+  s_06afd47cb23a86::t_1d14a78f1d3a31 80,92
+.prettierrc
+  s_06afd47cb23a86::t_557bc2c409abb7 10
+AGENTS.md
+  s_06afd47cb23a86::t_00056f3d1edd39 17
+examples/core-tests/README.md
+  s_06afd47cb23a86::t_69a33a0562019e 25
+examples/load-balancing/container_src/server.js
+  s_06afd47cb23a86::t_73f05c39cfe3e0 1,5-6,9-10,18-20
+examples/multiple-ports/container_src/server.js
+  s_06afd47cb23a86::t_468810251e4394 1-2,6-7,10-11,18-20,22,26-27,30-31,36,38-40
+examples/websocket/README.md
+  s_06afd47cb23a86::t_853f23ee01a4ad 27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "9763c0d1f8283a82b0cfdab727fa3dbe96e12f18",
+  "prompts": {},
+  "sessions": {
+    "s_06afd47cb23a86": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fdaffe312ffeRbrtinkLUZgQhP",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Matt Johnson-Pint <mjohnson-pint@cloudflare.com>"
+    }
+  }
+}
