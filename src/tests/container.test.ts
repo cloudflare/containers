@@ -9,6 +9,52 @@ describe('Container', () => {
     expect(container.sleepAfter).toBe('10m');
   });
 
+  test('getState should repair stale stopped state for a running container', async ({
+    mockCtx,
+    container,
+  }) => {
+    let resolveMonitor: () => void = () => undefined;
+    mockCtx.container.monitor.mockReturnValue(
+      new Promise(resolve => {
+        resolveMonitor = resolve;
+      })
+    );
+    mockCtx.storage.get.mockResolvedValue({ status: 'stopped', lastChange: Date.now() });
+    mockCtx.container.running = true;
+
+    await expect(container.getState()).resolves.toEqual(
+      expect.objectContaining({ status: 'running' })
+    );
+    expect(mockCtx.storage.put).toHaveBeenCalledWith(
+      '__CF_CONTAINER_STATE',
+      expect.objectContaining({ status: 'running' })
+    );
+    expect(mockCtx.container.monitor).toHaveBeenCalledOnce();
+
+    mockCtx.container.running = false;
+    resolveMonitor();
+    await vi.waitFor(() => {
+      expect(mockCtx.storage.put).toHaveBeenCalledWith(
+        '__CF_CONTAINER_STATE',
+        expect.objectContaining({ status: 'stopped_with_code', exitCode: 0 })
+      );
+    });
+  });
+
+  test('getState should not wait for an in-flight start', async ({ mockCtx, container }) => {
+    mockCtx.storage.get.mockResolvedValue({ status: 'stopped', lastChange: Date.now() });
+    mockCtx.container.running = true;
+    const containerInternals = container as unknown as {
+      startInFlight: Promise<number>;
+    };
+    containerInternals.startInFlight = new Promise(() => undefined);
+
+    await expect(container.getState()).resolves.toEqual(
+      expect.objectContaining({ status: 'running' })
+    );
+    expect(mockCtx.container.monitor).not.toHaveBeenCalled();
+  });
+
   test('should use configured constructor startup options', async ({ mockCtx }) => {
     const container = new Container(
       mockCtx as never,
@@ -245,10 +291,15 @@ describe('Container', () => {
     expect(mockCtx.container.start).not.toHaveBeenCalled();
 
     await container.alarm();
+    expect(mockCtx.container.start).not.toHaveBeenCalled();
+    expect(onStopSpy).not.toHaveBeenCalled();
+    expect(mockCtx.storage.deleteAlarm).not.toHaveBeenCalled();
+
     resumeStart();
     await startPromise;
 
     expect(onStopSpy).not.toHaveBeenCalled();
+    expect(mockCtx.storage.deleteAlarm).not.toHaveBeenCalled();
     await expect(container.getState()).resolves.toEqual(
       expect.objectContaining({ status: 'running' })
     );
