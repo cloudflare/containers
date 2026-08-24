@@ -74,6 +74,31 @@ describe('Container', () => {
     expect(mockCtx.container.getTcpPort).toHaveBeenCalledWith(8080);
   });
 
+  test('startAndWaitForPorts should recognise local-dev "not listening" error without leading "the"', async ({
+    mockCtx,
+    container,
+  }) => {
+    // In local dev (wrangler dev) the runtime returns "container is not listening"
+    // without the leading "the" that production uses. Both variants must be
+    // recognised so doStartContainer treats the state as benign and returns
+    // instead of retrying until timeout.
+    const localDevError = new Error('container is not listening on TCP address 10.0.0.1:8080');
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(localDevError)
+      .mockResolvedValue(new Response('ok'));
+    mockCtx.container.getTcpPort.mockReturnValue({ fetch: fetchMock });
+
+    await container.startAndWaitForPorts(8080);
+
+    expect(mockCtx.container.getTcpPort).toHaveBeenCalledWith(8080);
+    // Exactly 2 calls: doStartContainer recognises the error and returns
+    // immediately (1 call), then waitForPort succeeds on its first attempt
+    // (1 call). Without the fix the error is not recognised, doStartContainer
+    // retries, and the count rises to 3+.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   test('startAndWaitForPorts should surface rate-limited startup errors on the final retry', async ({
     mockCtx,
     container,
