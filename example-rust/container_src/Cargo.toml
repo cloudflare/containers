@@ -1,0 +1,23 @@
+[package]
+name = "server"
+version = "0.1.0"
+authors = ["katopz"]
+edition = "2021"
+description = "A simple Rust (Actix) application on Cloudflare Container"
+repository = "https://github.com/katopz/hello-cloudflare-container"
+license = "MIT"
+readme = "README.md"
+
+[dependencies]
+actix-web = "4"
+serde = { version = "1.0", features = ["derive"] }
+
+[profile.release]
+opt-level = "z"   # Optimize for size.
+strip = true      # Automatically strip symbols from the binary.
+lto = true        # Enable Link Time Optimization (LTO)
+codegen-units = 1 # Reduce Parallel Code Generation Units to Increase Optimization
+panic = "abort"
+
+[target.x86_64-unknown-linux-musl]
+linker = "gcc"
