@@ -94,6 +94,15 @@ export function makeMockCtx() {
 
 export type MockCtx = ReturnType<typeof makeMockCtx>;
 
+/** Make the container answer the next request with a 200 carrying `body`. */
+export function mockContainerBody(mockCtx: MockCtx, body: ReadableStream<Uint8Array>): void {
+  mockCtx.container.getTcpPort.mockReturnValue({
+    fetch: vi
+      .fn()
+      .mockResolvedValue({ status: 200, webSocket: null, headers: new Headers(), body }),
+  });
+}
+
 export const test = baseTest
   .extend('mockCtx', () => makeMockCtx())
   .extend('container', ({ mockCtx }) => {

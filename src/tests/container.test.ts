@@ -1,7 +1,8 @@
 import { describe, expect, test as baseTest, vi } from 'vitest';
 import { Container } from '../lib/container';
 import { getRandom } from '../lib/utils';
-import { MockWebSocket, test, webSocketPairSpy, type MockCtx } from './fixtures';
+import { setImmediate } from 'node:timers/promises';
+import { MockWebSocket, mockContainerBody, test, webSocketPairSpy, type MockCtx } from './fixtures';
 
 describe('Container', () => {
   test('should initialize with default values', ({ container }) => {
@@ -456,6 +457,202 @@ describe('Container', () => {
     await container.fetch(mockRequest);
 
     expect(renewSpy).toHaveBeenCalled();
+  });
+
+  test('an abandoned response body must not keep the container awake', async ({
+    mockCtx,
+    container,
+  }) => {
+    // Only freeze the clock: the pump moves bytes across real microtasks and setImmediate.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      container.sleepAfter = '1s';
+      mockCtx.container.running = true;
+      mockCtx.storage.get.mockResolvedValue({ status: 'healthy', lastChange: Date.now() });
+      // An endless body that the container keeps producing and nobody reads. Container bodies
+      // are byte streams, so the proxy can read them with a BYOB reader.
+      mockContainerBody(
+        mockCtx,
+        new ReadableStream({
+          type: 'bytes',
+          pull(controller) {
+            controller.enqueue(new Uint8Array(1024));
+          },
+        })
+      );
+
+      const response = await container.containerFetch(new Request('https://example.com/big'));
+
+      // @ts-expect-error - inflightRequests is private
+      expect(container.inflightRequests).toBe(0);
+
+      vi.advanceTimersByTime(2_000);
+      // @ts-expect-error - isActivityExpired is private
+      expect(container.isActivityExpired()).toBe(true);
+
+      // Reading the body counts as activity again.
+      await response.body!.getReader().read();
+      await setImmediate();
+      // @ts-expect-error - isActivityExpired is private
+      expect(container.isActivityExpired()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('a proxied response body must arrive intact', async ({ mockCtx, container }) => {
+    mockCtx.container.running = true;
+    mockCtx.storage.get.mockResolvedValue({ status: 'healthy', lastChange: Date.now() });
+    // Three chunks: two that fit a read buffer and one larger than it, so the pump has to
+    // hand back a partial view and reuse its buffer.
+    const chunks = [
+      new Uint8Array(3).fill(1),
+      new Uint8Array(5).fill(2),
+      new Uint8Array(300 * 1024).fill(3),
+    ];
+    mockContainerBody(
+      mockCtx,
+      new ReadableStream({
+        type: 'bytes',
+        pull(controller) {
+          const chunk = chunks.shift();
+          if (chunk) {
+            controller.enqueue(chunk);
+          } else {
+            // Closing a byte source leaves a pending BYOB read hanging until it is answered.
+            controller.close();
+            controller.byobRequest?.respond(0);
+          }
+        },
+      })
+    );
+
+    const response = await container.containerFetch(new Request('https://example.com/file'));
+    const bytes = new Uint8Array(await response.arrayBuffer());
+
+    expect(bytes.byteLength).toBe(3 + 5 + 300 * 1024);
+    expect(bytes.subarray(0, 3)).toEqual(new Uint8Array(3).fill(1));
+    expect(bytes.subarray(3, 8)).toEqual(new Uint8Array(5).fill(2));
+    expect(bytes.subarray(8).every(b => b === 3)).toBe(true);
+  });
+
+  test('cancelling a proxied response body must cancel the container body', async ({
+    mockCtx,
+    container,
+  }) => {
+    mockCtx.container.running = true;
+    mockCtx.storage.get.mockResolvedValue({ status: 'healthy', lastChange: Date.now() });
+    const cancel = vi.fn();
+    mockContainerBody(
+      mockCtx,
+      new ReadableStream({
+        type: 'bytes',
+        pull(controller) {
+          controller.enqueue(new Uint8Array(1024));
+        },
+        cancel,
+      })
+    );
+
+    const response = await container.containerFetch(new Request('https://example.com/big'));
+    await response.body!.cancel('client went away');
+    await setImmediate();
+
+    expect(cancel).toHaveBeenCalledWith('client went away');
+  });
+
+  test('a client abort must release the in-flight count when the container never answers', async ({
+    mockCtx,
+    container,
+  }) => {
+    vi.useFakeTimers();
+    try {
+      container.sleepAfter = '1s';
+      mockCtx.container.running = true;
+      mockCtx.storage.get.mockResolvedValue({ status: 'healthy', lastChange: Date.now() });
+      // The container accepts the connection but never responds.
+      mockCtx.container.getTcpPort.mockReturnValue({ fetch: vi.fn(() => new Promise(() => {})) });
+
+      const abort = new AbortController();
+      void container.containerFetch(
+        new Request('https://example.com/slow', { signal: abort.signal })
+      );
+      await vi.advanceTimersByTimeAsync(0);
+
+      // @ts-expect-error - inflightRequests is private
+      expect(container.inflightRequests).toBe(1);
+      vi.advanceTimersByTime(2_000);
+      // @ts-expect-error - isActivityExpired is private
+      expect(container.isActivityExpired()).toBe(false);
+
+      abort.abort();
+
+      // @ts-expect-error - inflightRequests is private
+      expect(container.inflightRequests).toBe(0);
+      vi.advanceTimersByTime(2_000);
+      // @ts-expect-error - isActivityExpired is private
+      expect(container.isActivityExpired()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('a request aborted before the container answers must release the count only once', async ({
+    mockCtx,
+    container,
+  }) => {
+    mockCtx.container.running = true;
+    mockCtx.storage.get.mockResolvedValue({ status: 'healthy', lastChange: Date.now() });
+    let answer!: (res: unknown) => void;
+    const answered = new Promise(resolve => {
+      answer = resolve;
+    });
+    mockCtx.container.getTcpPort.mockReturnValue({
+      fetch: vi
+        .fn()
+        .mockReturnValueOnce(answered)
+        .mockReturnValue(new Promise(() => {})),
+    });
+
+    const abort = new AbortController();
+    const aborted = container.containerFetch(
+      new Request('https://example.com/aborted', { signal: abort.signal })
+    );
+    void container.containerFetch(new Request('https://example.com/still-running'));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    // @ts-expect-error - inflightRequests is private
+    expect(container.inflightRequests).toBe(2);
+
+    abort.abort();
+    // @ts-expect-error - inflightRequests is private
+    expect(container.inflightRequests).toBe(1);
+
+    // When the container later answers the aborted request, that must not decrement the count
+    // for the other request.
+    answer({ status: 200, webSocket: null, headers: new Headers(), body: null });
+    await aborted;
+    // @ts-expect-error - inflightRequests is private
+    expect(container.inflightRequests).toBe(1);
+  });
+
+  test('a request whose signal is already aborted must not be counted as in flight', async ({
+    mockCtx,
+    container,
+  }) => {
+    mockCtx.container.running = true;
+    mockCtx.storage.get.mockResolvedValue({ status: 'healthy', lastChange: Date.now() });
+    mockCtx.container.getTcpPort.mockReturnValue({ fetch: vi.fn(() => new Promise(() => {})) });
+
+    const abort = new AbortController();
+    abort.abort();
+    void container.containerFetch(
+      new Request('https://example.com/gone', { signal: abort.signal })
+    );
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    // @ts-expect-error - inflightRequests is private
+    expect(container.inflightRequests).toBe(0);
   });
 
   test('containerFetch should create a WebSocket connection when requested', async ({
