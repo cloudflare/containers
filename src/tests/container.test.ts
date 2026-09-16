@@ -183,6 +183,98 @@ describe('Container', () => {
     });
   });
 
+  test('monitor should persist the exit code for the existing runtime exit message', async ({
+    mockCtx,
+    container,
+  }) => {
+    let rejectMonitor: (error: Error) => void = () => undefined;
+    using onErrorSpy = vi.spyOn(container, 'onError').mockResolvedValue(undefined);
+    mockCtx.container.monitor.mockReturnValue(
+      new Promise((_resolve, reject) => {
+        rejectMonitor = reject;
+      })
+    );
+
+    await container.start(undefined, { portToCheck: 8080, retries: 1, waitInterval: 1 });
+    mockCtx.container.running = false;
+    rejectMonitor(new Error('Runtime signalled the container to exit: 0'));
+
+    await vi.waitFor(() => {
+      expect(mockCtx.storage.put).toHaveBeenCalledWith(
+        '__CF_CONTAINER_STATE',
+        expect.objectContaining({ status: 'stopped_with_code', exitCode: 0 })
+      );
+    });
+    expect(onErrorSpy).not.toHaveBeenCalled();
+  });
+
+  test('monitor should not classify unrelated runtime errors as signalled exits', async ({
+    mockCtx,
+    container,
+  }) => {
+    let rejectMonitor: (error: Error) => void = () => undefined;
+    using onErrorSpy = vi.spyOn(container, 'onError').mockResolvedValue(undefined);
+    mockCtx.container.monitor.mockReturnValue(
+      new Promise((_resolve, reject) => {
+        rejectMonitor = reject;
+      })
+    );
+
+    await container.start(undefined, { portToCheck: 8080, retries: 1, waitInterval: 1 });
+    mockCtx.container.running = false;
+    rejectMonitor(new Error('container supervisor failed'));
+
+    await vi.waitFor(() => {
+      expect(mockCtx.storage.put).toHaveBeenCalledWith(
+        '__CF_CONTAINER_STATE',
+        expect.objectContaining({ status: 'stopped' })
+      );
+    });
+    expect(onErrorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'container supervisor failed' })
+    );
+    expect(mockCtx.storage.put).not.toHaveBeenCalledWith(
+      '__CF_CONTAINER_STATE',
+      expect.objectContaining({ status: 'stopped_with_code' })
+    );
+  });
+
+  test('rollout exit should replay onStop exactly once during recovery', async ({
+    mockCtx,
+    container,
+  }) => {
+    let rejectMonitor: (error: Error) => void = () => undefined;
+    using onStopSpy = vi.spyOn(container, 'onStop');
+    mockCtx.container.monitor.mockReturnValue(
+      new Promise((_resolve, reject) => {
+        rejectMonitor = reject;
+      })
+    );
+
+    await container.start(undefined, { portToCheck: 8080, retries: 1, waitInterval: 1 });
+    mockCtx.container.running = false;
+    rejectMonitor(
+      new Error('Runtime signalled the container to exit due to a new version rollout: 0')
+    );
+
+    await vi.waitFor(() => {
+      expect(mockCtx.storage.put).toHaveBeenCalledWith(
+        '__CF_CONTAINER_STATE',
+        expect.objectContaining({ status: 'stopped_with_code', exitCode: 0 })
+      );
+    });
+
+    await (
+      container as unknown as { syncPendingStoppedEvents(): Promise<void> }
+    ).syncPendingStoppedEvents();
+    await (
+      container as unknown as { syncPendingStoppedEvents(): Promise<void> }
+    ).syncPendingStoppedEvents();
+
+    expect(onStopSpy).toHaveBeenCalledTimes(1);
+    expect(onStopSpy).toHaveBeenCalledWith({ exitCode: 0, reason: 'exit' });
+  });
+
   test('replaced monitor should not stop a newer container instance', async ({
     mockCtx,
     container,

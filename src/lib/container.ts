@@ -22,7 +22,8 @@ import { DurableObject, WorkerEntrypoint } from 'cloudflare:workers';
 const NO_CONTAINER_INSTANCE_ERROR =
   'there is no container instance that can be provided to this durable object';
 const RATE_LIMITED_ERROR = 'you are requesting too many containers per second';
-const RUNTIME_SIGNALLED_ERROR = 'runtime signalled the container to exit:';
+const RUNTIME_SIGNALLED_ERROR = 'runtime signalled the container to exit';
+const RUNTIME_SIGNALLED_EXIT_CODE = /runtime signalled the container to exit.*:\s*(-?\d+)\s*$/i;
 const UNEXPECTED_EXIT_ERROR = 'container exited with unexpected exit code:';
 const NOT_LISTENING_ERROR = 'the container is not listening';
 const CONTAINER_STATE_KEY = '__CF_CONTAINER_STATE';
@@ -156,13 +157,8 @@ function getExitCodeFromError(error: unknown): number | null {
   }
 
   if (isRuntimeSignalledError(error)) {
-    return +error.message
-      .toLowerCase()
-      .slice(
-        error.message.toLowerCase().indexOf(RUNTIME_SIGNALLED_ERROR) +
-          RUNTIME_SIGNALLED_ERROR.length +
-          1
-      );
+    const match = error.message.match(RUNTIME_SIGNALLED_EXIT_CODE);
+    return match ? Number(match[1]) : null;
   }
 
   if (isContainerExitNonZeroError(error)) {

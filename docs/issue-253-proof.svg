@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1080" viewBox="0 0 1800 1080">
+  <rect width="1800" height="1080" fill="#050505"/>
+  <rect width="1800" height="42" fill="#1f1f1f"/>
+  <text x="22" y="28" fill="#f2f2f2" font-family="DejaVu Sans, sans-serif" font-size="18">Command Prompt — Cloudflare Containers #253 proof</text>
+  <text x="1750" y="28" fill="#cfcfcf" font-family="DejaVu Sans, sans-serif" font-size="18">— □ ×</text>
+  <g font-family="DejaVu Sans Mono, monospace" font-size="21">
+    <text x="42" y="92" fill="#d4d4d4">C:\containers&gt; vitest run src/tests/container.test.ts -t rollout</text>
+    <text x="42" y="132" fill="#ff6b6b">FAIL  rollout exit should replay onStop exactly once during recovery</text>
+    <text x="42" y="172" fill="#bdbdbd">Expected: status stopped_with_code</text>
+    <text x="42" y="208" fill="#ff6b6b">Received: status stopped</text>
+    <text x="42" y="248" fill="#ff6b6b">Test Files  1 failed (1)</text>
+    <text x="42" y="284" fill="#ff6b6b">Tests       1 failed | 2 passed | 33 skipped (36)</text>
+    <text x="42" y="324" fill="#bdbdbd">onStop() was not replayed.</text>
+
+    <text x="42" y="398" fill="#d4d4d4">C:\containers&gt; git checkout fix/253-onstop-rollout</text>
+    <text x="42" y="438" fill="#d4d4d4">C:\containers&gt; pnpm run test:unit</text>
+    <text x="42" y="478" fill="#86efac">Test Files  2 passed (2)</text>
+    <text x="42" y="514" fill="#86efac">Tests       37 passed (37)</text>
+
+    <text x="42" y="582" fill="#d4d4d4">C:\containers&gt; pnpm run typecheck</text>
+    <text x="42" y="618" fill="#86efac">PASS</text>
+    <text x="42" y="674" fill="#d4d4d4">C:\containers&gt; pnpm run lint</text>
+    <text x="42" y="710" fill="#86efac">PASS</text>
+    <text x="42" y="766" fill="#d4d4d4">C:\containers&gt; pnpm run build</text>
+    <text x="42" y="802" fill="#86efac">PASS</text>
+    <text x="42" y="858" fill="#d4d4d4">C:\containers&gt; pnpm run format:check</text>
+    <text x="42" y="894" fill="#86efac">All matched files use Prettier code style!</text>
+    <text x="42" y="958" fill="#d4d4d4">C:\containers&gt; echo onStop replay verified exactly once</text>
+    <text x="42" y="994" fill="#86efac">onStop replay verified exactly once with exitCode 0</text>
+    <text x="42" y="1038" fill="#d4d4d4">C:\containers&gt; _</text>
+  </g>
+</svg>
