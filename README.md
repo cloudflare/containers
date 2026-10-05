@@ -314,7 +314,8 @@ To configure interception on the class itself:
 > default for `target: ES2022` and above) a `static outbound = …` field is installed with
 > `[[DefineOwnProperty]]`, which creates an own property that shadows the inherited setter
 > instead of invoking it. The handler is then never registered and every outbound request
-> fails closed with `520 Origin is disallowed`, with no error or warning.
+> fails closed with `520 Origin is disallowed`, with no error or warning. See #247 for
+> details, including a fail-open variant of this trap.
 
 - `MyContainer.outbound = (req, env, ctx) => Response`
 
