@@ -559,7 +559,13 @@ export class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
       }
 
       if (this.container.running) {
+        // Nothing awaits this promise, so observe a failure here to keep it from
+        // surfacing as an unhandledRejection. refreshOutboundInterception() re-applies
+        // and awaits its own copy, so callers on that path still see the error.
         this.applyOutboundInterceptionPromise = this.applyOutboundInterception();
+        this.applyOutboundInterceptionPromise.catch(e => {
+          console.error(`Error applying outbound interception for container ${this.ctx.id}:`, e);
+        });
       }
     });
 

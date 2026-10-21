@@ -581,6 +581,27 @@ describe('HTTPS interception runtime guard', () => {
   });
 });
 
+describe('outbound interception on construction', () => {
+  test('logs a failure instead of leaving an unhandled rejection', async ({ mockCtx }) => {
+    class InterceptingContainer extends Container {}
+    InterceptingContainer.outbound = () => new Response('ok');
+    mockCtx.container.running = true;
+    mockCtx.container.interceptAllOutboundHttp.mockRejectedValue(new Error('intercept failed'));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const container = new InterceptingContainer(mockCtx as never, {});
+    await mockCtx.blockConcurrencyWhile.mock.results[0].value;
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('outbound interception'),
+      expect.any(Error)
+    );
+    await expect(container.applyOutboundInterceptionPromise).rejects.toThrow('intercept failed');
+    errorSpy.mockRestore();
+  });
+});
+
 describe('getRandom', () => {
   baseTest('should return a container stub', async () => {
     const mockBinding = {
